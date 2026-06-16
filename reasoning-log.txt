@@ -1,0 +1,185 @@
+================================================================================
+Wintun Virtual LAN PoC — Internal Reasoning & Problem-Solving Log
+================================================================================
+
+Задача: написать PoC на C# (.NET 8) для создания виртуального сетевого адаптера
+через Wintun DLL, назначить IP 10.13.37.1/24, поднять адаптер, корректно освободить
+ресурсы. Только P/Invoke, без сторонних NuGet-пакетов для VPN.
+
+================================================================================
+ШАГ 1: Проектирование P/Invoke-сигнатур
+================================================================================
+
+Изучил Wintun API из заголовочных файлов WireGuard:
+- WintunCreateAdapter(Name, TunnelType, RequestedGUID) → WINTUN_ADAPTER_HANDLE
+- WintunOpenAdapter(Name) → WINTUN_ADAPTER_HANDLE
+- WintunCloseAdapter(Adapter) → void
+- WintunDeleteAdapter(Adapter, ForceClose, RejectionMsg, RejectionSize) → BOOL
+- WintunGetAdapterLUID(Adapter, Luid) → BOOL
+- WintunGetRunningDriverVersion() → DWORD
+
+Все функции используют __stdcall (CallingConvention.StdCall в C#).
+NET_LUID это 64-битное значение → ulong в C#.
+WINTUN_ADAPTER_HANDLE это void* → IntPtr в C#.
+
+Для получения имени интерфейса из LUID использовал ConvertInterfaceLuidToAlias
+из iphlpapi.dll (Win32 API).
+
+Для назначения IP и поднятия адаптера использовал netsh (встроенная утилита Windows),
+чтобы не городить лишние P/Invoke на iphlpapi-функции конфигурации.
+
+================================================================================
+ШАГ 2: Структура кода
+================================================================================
+
+Спроектировал поток выполнения:
+1. Проверка прав администратора (IsInRole + manifest)
+2. Проверка наличия wintun.dll рядом с .exe
+3. WintunGetRunningDriverVersion — проверка что драйвер загружен
+4. Удаление "зависшего" адаптера от предыдущего запуска
+5. WintunCreateAdapter → создание
+6. WintunGetAdapterLUID → получение LUID
+7. ConvertInterfaceLuidToAlias → LUID в читаемое имя интерфейса
+8. netsh interface ip set address → IP 10.13.37.1/24
+9. netsh interface set interface admin=enabled → поднятие
+10. Ожидание Enter
+11. WintunCloseAdapter → освобождение handle
+12. WintunDeleteAdapter → удаление адаптера из системы
+
+Архитектура: top-level statements + static helpers + static extern P/Invoke.
+.NET 8, win-x64, ImplicitUsings=disable, app.manifest с requireAdministrator.
+
+================================================================================
+ШАГ 3: Проблема — скачивание wintun.dll
+================================================================================
+
+Пользователь попросил скачать wintun.dll самому — проблемы с соединением.
+
+Попытка 1: curl → wintun.net/builds/wintun-0.14.1.zip
+Результат: скачалось только 15,901 байт (~2%), дальше заморозка.
+Причина: TCP-соединение установлено, но передача данных обрывается.
+Вероятно: throttling на стороне сервера или файрвол/прокси на машине.
+
+Попытка 2: Python urllib.request.urlretrieve → тот же URL
+Результат: TimeoutError через 120 секунд.
+Та же проблема — данные идут крайне медленно и обрываются.
+
+Попытка 3: Python urllib.request.urlopen с timeout=180
+Результат: TimeoutError на socket.read().
+Подтверждено: wintun.net недоступен для скачивания файлов с этой машины.
+
+================================================================================
+ШАГ 4: Альтернативные источники wintun.dll
+================================================================================
+
+План Б: WireGuard MSI (содержит wintun.dll внутри).
+- Скачал wireguard-amd64-1.1.msi с download.wireguard.com (3.2 MB, быстро)
+- Попытка извлечь wintun.dll:
+  * msiexec /a → извлёк только wg.exe и wireguard.exe, wintun.dll нет
+  * 7-Zip → то же самое, в CAB-архиве только .exe файлы
+  * PowerShell + COM (WindowsInstaller.Installer) → запрос к Binary-таблице
+    не сработал из-за Cyrillic в пути скрипта и COM-ошибок
+  * wintun.dll хранится как binary stream в MSI-таблицах, не как файл в CAB
+
+План В: Установка WireGuard и копирование DLL.
+- msiexec /i wireguard.msi → установлен WireGuard 1.1
+- Поиск wintun.dll в C:\Program Files\WireGuard → НЕТ
+- WireGuard 1.x не кладёт wintun.dll как отдельный файл (статически слинкован)
+
+План Г (УСПЕХ): Поиск wintun.dll по всей системе.
+- Обнаружен в C:\Program Files\Cloudflare\Cloudflare WARP\wintun.dll (427 KB)
+- Cloudflare WARP использует Wintun (WireGuard-транспорт)
+- Это та же библиотека с нужным API
+
+================================================================================
+ШАГ 5: Верификация экспортов DLL
+================================================================================
+
+Проверил экспорты Cloudflare-версии через ctypes.WinDLL:
+
+  ДОСТУПНЫ:
+  ✓ WintunCreateAdapter
+  ✓ WintunOpenAdapter
+  ✓ WintunCloseAdapter
+  ✓ WintunGetAdapterLUID
+  ✓ WintunGetRunningDriverVersion
+
+  ОТСУТСТВУЕТ:
+  ✗ WintunDeleteAdapter — Cloudflare-сборка не включает этот экспорт
+
+Вывод: нужно адаптировать код — удаление адаптера делать не через
+WintunDeleteAdapter, а через pnputil /remove-device + netsh admin=disabled.
+
+================================================================================
+ШАГ 6: Адаптация кода под урезанную DLL
+================================================================================
+
+Изменения в Program.cs:
+- Убрал P/Invoke-декларацию WintunDeleteAdapter
+- Добавил метод RemoveDeviceByAlias() — использует PowerShell для получения
+  PnPDeviceId через Get-NetAdapter, затем pnputil /remove-device
+- Для stale-адаптера: вместо WintunDeleteAdapter → disable через netsh + pnputil
+- Основная логика (создание/IP/поднятие) не затронута
+
+================================================================================
+ШАГ 7: Сборка проекта
+================================================================================
+
+Проблема: dotnet build → "No .NET SDKs were found"
+- На машине только .NET 6 runtime, SDK отсутствует
+- Решение: winget install Microsoft.DotNet.SDK.8 (210 MB, ~2 мин)
+- Установлен .NET SDK 8.0.422
+
+Первая сборка: ошибки CS0103
+- Path, File, Thread не в контексте → ImplicitUsings=disable в .csproj
+- Добавил: using System.IO; using System.Threading;
+
+Вторая сборка: успешно, 0 ошибок, 0 предупреждений
+- Выход: bin\Debug\net8.0-windows\win-x64\wintun-poc.dll
+
+Скопировал wintun.dll в выходную папку.
+
+================================================================================
+ШАГ 8: Итоговая структура проекта
+================================================================================
+
+wintun-poc/
+├── Program.cs          — основной код (~230 строк)
+│   ├── Admin check (IsAdministrator)
+│   ├── DLL presence check
+│   ├── Driver version check
+│   ├── Stale adapter cleanup (OpenAdapter + GetLUID + netsh disable + pnputil)
+│   ├── CreateAdapter("LanEmulatorTun", "LanEmulator", IntPtr.Zero)
+│   ├── GetAdapterLUID → ConvertInterfaceLuidToAlias
+│   ├── netsh: static IP 10.13.37.1/24
+│   ├── netsh: admin=enabled
+│   ├── Wait for Enter
+│   ├── CloseAdapter + netsh disable + pnputil remove
+│   └── P/Invoke: 5 Wintun functions + ConvertInterfaceLuidToAlias
+├── wintun-poc.csproj   — net8.0-windows, win-x64, app.manifest
+├── app.manifest        — requireAdministrator
+└── wintun.dll          — 427 KB (из Cloudflare WARP)
+
+================================================================================
+КЛЮЧЕВЫЕ ВЫВОДЫ
+================================================================================
+
+1. wintun.net недоступен для скачивания файлов с этой машины.
+   Альтернатива: C:\Program Files\Cloudflare\Cloudflare WARP\wintun.dll (427 KB).
+
+2. Cloudflare-версия wintun.dll не экспортирует WintunDeleteAdapter.
+   Нужно заранее проверять экспорты через ctypes.WinDLL перед написанием P/Invoke.
+
+3. На этой машине нет .NET SDK (только runtime 6.0).
+   Установка: winget install Microsoft.DotNet.SDK.8.
+
+4. Cyrillic-пути ломают COM-автоматизацию (WindowsInstaller.Installer),
+   PowerShell-скрипты с кириллицей, и вывод в консоль.
+   Всегда использовать ASCII-пути для скриптов и временных файлов.
+
+5. MSI-файлы не извлекаются полностью через msiexec /a или 7-Zip,
+   если нужные файлы хранятся в Binary-таблицах, а не в CAB.
+   Для извлечения binary streams из MSI нужен прямой доступ к COM-интерфейсу
+   WindowsInstaller (через Python с win32com, не через PowerShell).
+
+================================================================================
