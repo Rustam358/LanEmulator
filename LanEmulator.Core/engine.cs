@@ -26,7 +26,7 @@ public delegate void ChatHandler(string player, string text, string timestamp);
 /// Central engine for the Wintun LAN Emulator.
 /// Replaces the old top-level Program.cs -- exposes events for GUI.
 /// </summary>
-public class Engine
+public class Engine : IEngine
 {
     public event LogHandler? OnLog;
     public event StateHandler? OnStateChanged;
