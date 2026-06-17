@@ -1,5 +1,5 @@
 """
-Wintun LAN Emulator — Signaling Server v1.0.0
+Wintun LAN Emulator — Signaling Server v1.1.0
 FastAPI + uvicorn | UDP discovery responder on port 51821
 """
 import socket
@@ -216,7 +216,7 @@ async def chat_poll(room_id: str, last_id: int = 0):
 
 if __name__ == "__main__":
     import uvicorn
-    print(f"=== LanEmulator Signaling Server v1.0.0 ===")
+    print(f"=== LanEmulator Signaling Server v1.1.0 ===")
     print(f"VPN: {VPN_SUBNET}/24 | Max: {MAX_PLAYERS} | Timeout: {PLAYER_TIMEOUT.total_seconds():.0f}s")
     print(f"Discovery: UDP {DISCOVERY_PORT}")
     uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=False)
