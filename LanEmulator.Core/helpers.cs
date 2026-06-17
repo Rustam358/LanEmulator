@@ -9,11 +9,10 @@ public static class Helpers
         var candidates = new List<string>();
 
         // 1. Known install directories (most reliable — bypass 'where.exe' which finds Store stubs)
-        string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        string? user = Path.GetDirectoryName(Path.GetDirectoryName(localAppData));
-        if (user != null)
+        try
         {
-            var pyBase = Path.Combine(user, "AppData", "Local", "Programs", "Python");
+            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string pyBase = Path.Combine(localAppData, "Programs", "Python");
             if (Directory.Exists(pyBase))
             {
                 foreach (var dir in Directory.GetDirectories(pyBase))
@@ -25,6 +24,7 @@ public static class Helpers
                 candidates.Sort((a, b) => string.Compare(b, a, StringComparison.OrdinalIgnoreCase));
             }
         }
+        catch { } // Directory read may fail on restricted systems
 
         // 2. 'py' launcher (C:\Windows\py.exe — part of official Python install)
         const string pyLauncher = @"C:\Windows\py.exe";
