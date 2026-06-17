@@ -137,10 +137,10 @@ public class Engine
         Log(LogLevel.Ok, $"Server at {ServerUrl}");
 
         // Firewall
-        try { Helpers.RunSilent("netsh", $"advfirewall firewall add rule name=\"LanEmulator Server\" dir=in action=allow protocol=TCP localport={ServerHttpPort}"); } catch { }
-        try { Helpers.RunSilent("netsh", $"advfirewall firewall add rule name=\"LanEmulator UDP\" dir=in action=allow protocol=UDP localport={UdpPort}"); } catch { }
+        try { Helpers.RunSilent("netsh", $"advfirewall firewall add rule name=\"LanEmulator Server\" dir=in action=allow protocol=TCP localport={ServerHttpPort}"); } catch (Exception ex) { Log(LogLevel.Warn, $"Firewall TCP: {ex.Message}"); }
+        try { Helpers.RunSilent("netsh", $"advfirewall firewall add rule name=\"LanEmulator UDP\" dir=in action=allow protocol=UDP localport={UdpPort}"); } catch (Exception ex) { Log(LogLevel.Warn, $"Firewall UDP: {ex.Message}"); }
         // UPnP proxy (best-effort)
-        try { Helpers.RunSilent("netsh", $"interface portproxy add v4tov4 listenport={ServerHttpPort} connectaddress=127.0.0.1 connectport={ServerHttpPort}"); } catch { }
+        try { Helpers.RunSilent("netsh", $"interface portproxy add v4tov4 listenport={ServerHttpPort} connectaddress=127.0.0.1 connectport={ServerHttpPort}"); } catch (Exception ex) { Log(LogLevel.Warn, $"UPnP proxy: {ex.Message}"); }
 
         return Task.CompletedTask;
     }
@@ -338,7 +338,7 @@ public class Engine
                 for (int i = 0; i < 10; i++)
                     _udp.Send(holePunchData, holePunchData.Length, ep);
             }
-            catch { }
+            catch (Exception ex) { Log(LogLevel.Warn, $"Hole punch: {ex.Message}"); }
             Thread.Sleep(100);
         }
         Log(LogLevel.Ok, $"Hole punch → {snapshot.Count} peer(s)");
@@ -419,7 +419,7 @@ public class Engine
                 $"/chat/poll?room_id={Uri.EscapeDataString(RoomId)}&last_id={lastId}");
             return msgs ?? new();
         }
-        catch { return new(); }
+        catch (Exception ex) { Log(LogLevel.Warn, $"Chat poll: {ex.Message}"); return new(); }
     }
 
     /// <summary>Send a chat message. Returns server-assigned message id, or -1.</summary>
@@ -452,20 +452,21 @@ public class Engine
         if (_http != null)
         {
             try { await _http.PostAsync($"/leave?room_id={Uri.EscapeDataString(RoomId)}&player_id={Uri.EscapeDataString(Environment.MachineName)}", null); }
-            catch { }
+            catch (Exception ex) { Log(LogLevel.Warn, $"Leave server: {ex.Message}"); }
         }
+        _http?.Dispose(); _http = null;
 
         // Kill game
         if (GameProcess is { HasExited: false })
         {
             try { GameProcess.Kill(true); GameProcess.WaitForExit(5000); }
-            catch { }
+            catch (Exception ex) { Log(LogLevel.Warn, $"Game kill: {ex.Message}"); }
         }
 
         // Wait for keepalive
         if (_keepaliveTask != null)
         {
-            try { await _keepaliveTask; } catch { }
+            try { await _keepaliveTask; } catch (Exception ex) { Log(LogLevel.Warn, $"Keepalive shutdown: {ex.Message}"); }
         }
 
         _pumpNetToTun?.Join(3000);
@@ -475,7 +476,7 @@ public class Engine
         if (_session != IntPtr.Zero) { WintunInterop.WintunEndSession(_session); _session = IntPtr.Zero; }
         if (_adapter != IntPtr.Zero) { WintunInterop.WintunCloseAdapter(_adapter); _adapter = IntPtr.Zero; }
 
-        _udp?.Close();
+        _udp?.Dispose();
 
         // Routes
         lock (_peerLock) { foreach (var p in _peers) Helpers.RunRouteSilent($"delete {p.virtual_ip}"); }
@@ -487,7 +488,7 @@ public class Engine
         // Stop built-in server
         if (_server != null)
         {
-            try { await _server.StopAsync(); } catch { }
+            try { await _server.StopAsync(); } catch (Exception ex) { Log(LogLevel.Warn, $"Server stop: {ex.Message}"); }
             _server.Dispose();
             _server = null;
         }

@@ -108,6 +108,6 @@ public static class Helpers
             }
             return false; // driver not loaded, may need reboot
         }
-        catch { return false; }
+        catch (Exception ex) { Debug.WriteLine($"AutoInstallDriverAsync failed: {ex.Message}"); return false; }
     }
 }

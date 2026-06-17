@@ -28,7 +28,7 @@ public static class Pumps
             }
         }
         catch (OperationCanceledException) { }
-        catch { }
+        catch (Exception ex) { Debug.WriteLine($"PumpNetToTun error: {ex.Message}"); }
     }
 
     public static void PumpTunToNet(UdpClient udp, IntPtr session,
@@ -77,6 +77,7 @@ public static class Pumps
         }
         catch (OperationCanceledException) { }
         finally { wh.SafeWaitHandle = new Microsoft.Win32.SafeHandles.SafeWaitHandle(IntPtr.Zero, ownsHandle: false); }
+        wh.Dispose();
     }
 
     private static bool IsBroadcast(IPAddress ip)

@@ -94,7 +94,7 @@ public sealed class LanServer : IDisposable
             else
                 WriteJson(resp, new { server = "LanEmulator", version = Engine.Version });
         }
-        catch { }
+        catch (Exception ex) { Debug.WriteLine($"HandleRequest error: {ex.Message}"); }
     }
 
     private async Task HandleRegister(HttpListenerRequest req, HttpListenerResponse resp)
