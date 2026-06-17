@@ -39,6 +39,7 @@
             <Grid x:Name="WelcomePage" Visibility="Visible">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="*"/>
+                    <RowDefinition Height="100"/>
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
@@ -84,6 +85,12 @@
                         </Button>
                     </StackPanel>
                 </StackPanel>
+
+                <!-- Welcome page log (errors visible before entering lobby) -->
+                <ListBox x:Name="LstWelcomeLog" Grid.Row="1"
+                         Background="#181825" BorderThickness="0"
+                         Foreground="#CDD6F4" FontFamily="Consolas" FontSize="11"
+                         Margin="24,0,24,0"/>
 
                 <!-- Bottom bar -->
                 <Border Grid.Row="1" Background="#181825" Padding="12,8"

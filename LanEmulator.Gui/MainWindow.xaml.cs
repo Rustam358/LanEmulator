@@ -156,23 +156,22 @@ public partial class MainWindow : Window
             await _engine.HostSetupAsync();
             WireEngine();
 
-            // Show lobby
-            ShowLobby();
-            TxtLobbyStatus.Text = "Starting server…";
-            TxtLobbyRoom.Text = $"Room: {_engine.RoomId}";
-
-            // Connect + VPN
+            // Connect + VPN — lobby shown only after success
             _engine.Configure(1, _engine.RoomId, gamePath);
             await _engine.ConnectAsync(_engine.ServerUrl);
             await _engine.RunGoldbergAsync();
             _engine.StartVpn();
             _engine.LaunchGame();
 
+            ShowLobby();
+            TxtLobbyStatus.Text = "Connected";
+            TxtLobbyRoom.Text = $"Room: {_engine.RoomId}";
             OnStateChanged("running", _engine.MyVirtualIP);
             AddPlayerToList($"[{_engine.MyVirtualIP}] {Environment.MachineName} (you) \U0001F451", true);
         }
         catch (Exception ex)
         {
+            MessageBox.Show(ex.Message, "LanEmulator Error", MessageBoxButton.OK, MessageBoxImage.Error);
             LogStatic(LogLevel.Error, ex.Message);
             ShowWelcome();
             ResetWelcomeButtons();
@@ -240,20 +239,20 @@ public partial class MainWindow : Window
             _engine.Configure(1, roomDlg.Answer, gamePath);
             WireEngine();
 
-            ShowLobby();
-            TxtLobbyStatus.Text = "Connecting…";
-            TxtLobbyRoom.Text = $"Room: {roomDlg.Answer}";
-
             await _engine.ConnectAsync(serverUrl);
             await _engine.RunGoldbergAsync();
             _engine.StartVpn();
             _engine.LaunchGame();
 
+            ShowLobby();
+            TxtLobbyStatus.Text = "Connected";
+            TxtLobbyRoom.Text = $"Room: {roomDlg.Answer}";
             OnStateChanged("running", _engine.MyVirtualIP);
             AddPlayerToList($"[{_engine.MyVirtualIP}] {Environment.MachineName} (you)", false);
         }
         catch (Exception ex)
         {
+            MessageBox.Show(ex.Message, "LanEmulator Error", MessageBoxButton.OK, MessageBoxImage.Error);
             LogStatic(LogLevel.Error, ex.Message);
             ShowWelcome();
             ResetWelcomeButtons();
@@ -483,7 +482,7 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>Log a message before engine starts (welcome page).</summary>
+    /// <summary>Log a message before engine starts (visible on welcome page).</summary>
     private void LogStatic(LogLevel level, string msg) => Dispatcher.Invoke(() =>
     {
         var brush = level switch
@@ -502,6 +501,8 @@ public partial class MainWindow : Window
             FontSize = 11,
             Margin = new Thickness(0, 1, 0, 1)
         };
+        LstWelcomeLog.Items.Add(item);
+        LstWelcomeLog.ScrollIntoView(LstWelcomeLog.Items[^1]);
         LstLog.Items.Add(item);
         LstLog.ScrollIntoView(LstLog.Items[^1]);
     });
