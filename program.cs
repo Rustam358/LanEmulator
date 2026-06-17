@@ -50,6 +50,15 @@ if (!IsAdministrator())
     return 1;
 }
 
+// ── 1b. Global mutex — prevent multiple instances ─────────────
+using var appMutex = new Mutex(true, @"Global\LanEmulatorAdapter", out bool isFirstInstance);
+if (!isFirstInstance)
+{
+    Console.Error.WriteLine("[FATAL] Another instance of LanEmulator is already running.");
+    Console.Error.WriteLine("        Only one virtual adapter can be active at a time.");
+    return 13;
+}
+
 // ── 2. Banner ─────────────────────────────────────────────────
 Console.WriteLine($"=== LanEmulator v{Version} — Virtual LAN for Gaming ===");
 Console.WriteLine($"    UDP data : 0.0.0.0:{UdpPort}");
