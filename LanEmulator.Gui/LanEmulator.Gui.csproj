@@ -22,7 +22,6 @@
   <ItemGroup>
     <None Update="wintun.dll" CopyToPublishDirectory="PreserveNewest" />
     <None Update="goldberg\**" CopyToPublishDirectory="PreserveNewest" />
-    <None Update="server.py" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

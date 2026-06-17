@@ -45,7 +45,6 @@ public class Engine
     public bool IsRunning { get; private set; }
     public string? GamePath { get; private set; }
     public string? GameDir { get; private set; }
-    public Process? ServerProcess { get; private set; }
     public Process? GameProcess { get; private set; }
 
     public const string Version = "1.2.0";
@@ -62,6 +61,7 @@ public class Engine
     private readonly Dictionary<string, IPEndPoint> _ipToPeer = new();
 
     private HttpClient? _http;
+    private LanServer? _server;
     private CancellationTokenSource? _cts;
     private UdpClient? _udp;
     private Thread? _pumpNetToTun, _pumpTunToNet;
@@ -112,74 +112,29 @@ public class Engine
     // Setup phases (called sequentially by GUI)
     // ════════════════════════════════════════════════════════
 
-    /// <summary>Phase 1: Start embedded Python server (host only).</summary>
-    public async Task HostSetupAsync()
+    /// <summary>Phase 1: Start built-in C# HTTP server (host only). No Python required.</summary>
+    public Task HostSetupAsync()
     {
         IsHost = true;
-        OnStateChanged?.Invoke("host_setup", null);
         RoomId = GenerateRoomId();
         OnRoomCreated?.Invoke(RoomId);
         Log(LogLevel.Info, $"Room ID: {RoomId}");
 
-        string? pythonPath = Helpers.FindPython();
-        if (pythonPath == null)
-            throw new Exception("Python not found. Install from https://python.org");
+        Log(LogLevel.Info, "Starting built-in signaling server...");
+        _server = new LanServer(ServerHttpPort);
+        _server.Start();
 
-        string baseDir = AppContext.BaseDirectory;
-        string serverPy = Path.Combine(baseDir, "server.py");
-        if (!File.Exists(serverPy))
-            throw new Exception("server.py not found");
-
-        // Install deps
-        Log(LogLevel.Info, "Checking Python dependencies…");
-        try
-        {
-            var checkProc = Process.Start(new ProcessStartInfo(pythonPath, "-c \"import fastapi, uvicorn\"")
-            { UseShellExecute = false, RedirectStandardError = true, CreateNoWindow = true });
-            checkProc!.WaitForExit(5000);
-            if (checkProc.ExitCode != 0)
-            {
-                Log(LogLevel.Info, "Installing fastapi + uvicorn…");
-                var installProc = Process.Start(new ProcessStartInfo(pythonPath, "-m pip install fastapi uvicorn -q")
-                { UseShellExecute = false, CreateNoWindow = true });
-                installProc!.WaitForExit(30_000);
-            }
-        }
-        catch { /* best-effort */ }
-
-        // Start server
-        ServerProcess = Process.Start(new ProcessStartInfo(pythonPath,
-            $"-m uvicorn server:app --host 0.0.0.0 --port {ServerHttpPort}")
-        {
-            UseShellExecute = false, CreateNoWindow = true,
-            WorkingDirectory = baseDir,
-            RedirectStandardOutput = true, RedirectStandardError = true
-        });
-        Log(LogLevel.Ok, $"Server started on 0.0.0.0:{ServerHttpPort}");
-        await Task.Delay(2000); // uvicorn boot
-
-        string localIP = GetLocalIP();
-        ServerUrl = $"http://{localIP}:{ServerHttpPort}";
-        Log(LogLevel.Ok, $"LAN IP: {localIP}");
+        string localIp = GetLocalIP();
+        ServerUrl = $"http://{localIp}:{ServerHttpPort}";
+        Log(LogLevel.Ok, $"Server at {ServerUrl}");
 
         // Firewall
-        Helpers.RunSilent("netsh", $"advfirewall firewall add rule name=\"LanEmulator Server\" dir=in action=allow protocol=TCP localport={ServerHttpPort}");
-        Helpers.RunSilent("netsh", $"advfirewall firewall add rule name=\"LanEmulator UDP\" dir=in action=allow protocol=UDP localport={UdpPort}");
-        Log(LogLevel.Ok, "Firewall rules added");
+        try { Helpers.RunSilent("netsh", $"advfirewall firewall add rule name=\"LanEmulator Server\" dir=in action=allow protocol=TCP localport={ServerHttpPort}"); } catch { }
+        try { Helpers.RunSilent("netsh", $"advfirewall firewall add rule name=\"LanEmulator UDP\" dir=in action=allow protocol=UDP localport={UdpPort}"); } catch { }
+        // UPnP proxy (best-effort)
+        try { Helpers.RunSilent("netsh", $"interface portproxy add v4tov4 listenport={ServerHttpPort} connectaddress=127.0.0.1 connectport={ServerHttpPort}"); } catch { }
 
-        // UPnP
-        try
-        {
-            Type? natType = Type.GetTypeFromProgID("HNetCfg.NATUPnP");
-            if (natType != null)
-            {
-                dynamic nat = Activator.CreateInstance(natType)!;
-                dynamic mappings = nat.StaticPortMappingCollection;
-                mappings?.Add(ServerHttpPort, "TCP", ServerHttpPort, localIP, true, "LanEmulator Server");
-                Log(LogLevel.Ok, $"UPnP: TCP {ServerHttpPort} → {localIP}");
-            }
-        }
-        catch { Log(LogLevel.Info, "UPnP not available"); }
+        return Task.CompletedTask;
     }
 
     /// <summary>Phase 1b: Join — discover or enter server URL.</summary>
@@ -521,11 +476,12 @@ public class Engine
         Helpers.RunSilent("netsh", "advfirewall firewall delete rule name=\"LanEmulator Server\"");
         Helpers.RunSilent("netsh", "advfirewall firewall delete rule name=\"LanEmulator UDP\"");
 
-        // Kill server process
-        if (ServerProcess is { HasExited: false })
+        // Stop built-in server
+        if (_server != null)
         {
-            try { ServerProcess.Kill(true); ServerProcess.WaitForExit(3000); }
-            catch { }
+            try { await _server.StopAsync(); } catch { }
+            _server.Dispose();
+            _server = null;
         }
 
         Log(LogLevel.Ok, "Shutdown complete");
