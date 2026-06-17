@@ -39,11 +39,29 @@
         <Style x:Key="TitleButton" TargetType="Button">
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Foreground" Value="#585B70"/>
-            <Setter Property="Width" Value="36"/>
-            <Setter Property="Height" Value="28"/>
-            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="#A6ADC8"/>
+            <Setter Property="Width" Value="46"/>
+            <Setter Property="Height" Value="34"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="FontFamily" Value="Segoe UI"/>
             <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                CornerRadius="0">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#45475A"/>
+                    <Setter Property="Foreground" Value="#CDD6F4"/>
+                </Trigger>
+            </Style.Triggers>
         </Style>
 
         <Style x:Key="BigButton" TargetType="Button">

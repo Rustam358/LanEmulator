@@ -60,9 +60,31 @@ public partial class MainWindow : Window
     }
 
         private void TitleBar_Drag(object s, MouseButtonEventArgs e)
-    { if (e.LeftButton == MouseButtonState.Pressed) DragMove(); }
+    {
+        if (e.ClickCount == 2) { ToggleMaximize(); return; }
+        if (e.LeftButton == MouseButtonState.Pressed) DragMove();
+    }
+
+    private void Window_StateChanged(object? s, EventArgs e)
+    {
+        if (WindowState == WindowState.Maximized)
+        { BtnMaximize.Content = "\u2750"; WindowBorder.CornerRadius = new CornerRadius(0); }
+        else
+        { BtnMaximize.Content = "\u25A1"; WindowBorder.CornerRadius = new CornerRadius(12); }
+    }
 
     private void BtnMinimize_Click(object s, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+
+    private void BtnMaximize_Click(object s, RoutedEventArgs e) => ToggleMaximize();
+
+    private void ToggleMaximize()
+    {
+        if (WindowState == WindowState.Maximized)
+        { WindowState = WindowState.Normal; BtnMaximize.Content = "\u25A1"; }
+        else
+        { WindowState = WindowState.Maximized; BtnMaximize.Content = "\u2750"; }
+    }
+
     private void BtnClose_Click(object s, RoutedEventArgs e) => Application.Current.Shutdown();
 
     // ════════════════════════════════════════════════════════

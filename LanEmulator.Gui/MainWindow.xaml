@@ -7,11 +7,12 @@
         WindowStartupLocation="CenterScreen"
         ResizeMode="CanResize"
         Closing="Window_Closing"
+        StateChanged="Window_StateChanged"
         WindowStyle="None"
         AllowsTransparency="True"
         Background="Transparent">
 
-    <Border Background="#1E1E2E" CornerRadius="12">
+    <Border x:Name="WindowBorder" Background="#1E1E2E" CornerRadius="12">
     <Grid Margin="1">
         <!-- Title bar -->
         <Grid.RowDefinitions>
@@ -19,15 +20,16 @@
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <Grid Grid.Row="0" Background="#181825" MouseLeftButtonDown="TitleBar_Drag">
+        <Grid Grid.Row="0" x:Name="TitleBar" Background="#181825" MouseLeftButtonDown="TitleBar_Drag">
             <TextBlock Text="LanEmulator v1.1" Foreground="#6C7086" FontSize="12"
                        VerticalAlignment="Center" Margin="14,0,0,0"/>
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                <Button Content="_" Style="{StaticResource TitleButton}"
-                        Click="BtnMinimize_Click" ToolTip="Minimize" FontWeight="Bold"/>
+                <Button Content="─" Style="{StaticResource TitleButton}"
+                        Click="BtnMinimize_Click" ToolTip="Minimize"/>
+                <Button x:Name="BtnMaximize" Content="□" Style="{StaticResource TitleButton}"
+                        Click="BtnMaximize_Click" ToolTip="Maximize"/>
                 <Button Content="✕" Style="{StaticResource TitleButton}"
-                        Click="BtnClose_Click" ToolTip="Close"
-                        Foreground="#F38BA8"/>
+                        Click="BtnClose_Click" ToolTip="Close"/>
             </StackPanel>
         </Grid>
 
