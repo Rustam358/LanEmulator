@@ -119,6 +119,13 @@ pumpTunToNet.Start();
 Console.WriteLine("[OK]   Packet pump threads running");
 
 // ── 10. Wait ──────────────────────────────────────────────────
+var shutdownEvent = new ManualResetEventSlim(false);
+Console.CancelKeyPress += (_, e) =>
+{
+    e.Cancel = true; // Don't kill process immediately
+    shutdownEvent.Set();
+};
+
 Console.WriteLine();
 Console.WriteLine("╔═══════════════════════════════════════════════════════╗");
 Console.WriteLine("║  Adapter is LIVE — Ring Buffer + UDP ACTIVE.         ║");
@@ -127,12 +134,15 @@ Console.WriteLine($"║  Tun IP    : {AdapterIP}/{PrefixLength,-30}║");
 Console.WriteLine($"║  UDP recv  : 0.0.0.0:{UdpPort,-31}║");
 Console.WriteLine($"║  UDP send  : {PeerIP}:{PeerPort,-31}║");
 Console.WriteLine("║                                                       ║");
-Console.WriteLine("║  Test from ANOTHER console:                           ║");
+Console.WriteLine("║  Test from a SECOND terminal:                         ║");
 Console.WriteLine($"║    ping {AdapterIP}                                   ║");
+Console.WriteLine("║    python test-peer.py                                ║");
 Console.WriteLine("║                                                       ║");
-Console.WriteLine("║  Press ENTER to shutdown…                            ║");
+Console.WriteLine("║  Press Ctrl+C to shutdown…                           ║");
 Console.WriteLine("╚═══════════════════════════════════════════════════════╝");
-Console.ReadLine();
+
+// Wait until Ctrl+C is pressed
+shutdownEvent.Wait();
 
 // ── 11. Cleanup ───────────────────────────────────────────────
 Console.WriteLine();
