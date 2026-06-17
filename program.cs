@@ -761,22 +761,23 @@ static async Task KeepAliveAsync(HttpClient http, string roomId, int udpPort,
                 !string.Equals(p.player_id, myId, StringComparison.OrdinalIgnoreCase));
             var currentIds = new HashSet<string>(current.Select(p => p.player_id));
 
+            // Collect route changes outside the lock
+            var routesToDelete = new List<string>();
+            var leftMsgs = new List<string>();
+
             lock (peerLock)
             {
                 // Detect left peers
-                var left = new List<string>();
                 for (int i = peers.Count - 1; i >= 0; i--)
                 {
                     if (!currentIds.Contains(peers[i].player_id))
                     {
-                        left.Add($"{peers[i].player_id} ({peers[i].virtual_ip})");
+                        leftMsgs.Add($"{peers[i].player_id} ({peers[i].virtual_ip})");
                         ipToPeer.Remove(peers[i].virtual_ip);
-                        RunRouteSilent($"delete {peers[i].virtual_ip}");
+                        routesToDelete.Add(peers[i].virtual_ip);
                         peers.RemoveAt(i);
                     }
                 }
-                foreach (var msg in left)
-                    Console.WriteLine($"\n[PEER LEFT] {msg}");
 
                 // Detect new peers
                 foreach (var p in current)
@@ -789,6 +790,12 @@ static async Task KeepAliveAsync(HttpClient http, string roomId, int udpPort,
                     }
                 }
             }
+
+            // Remove routes OUTSIDE the lock (route command takes seconds)
+            foreach (var ip in routesToDelete)
+                RunRouteSilent($"delete {ip}");
+            foreach (var msg in leftMsgs)
+                Console.WriteLine($"\n[PEER LEFT] {msg}");
             knownIds = currentIds;
         }
         catch (OperationCanceledException) { break; }
