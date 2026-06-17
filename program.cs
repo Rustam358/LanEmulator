@@ -118,16 +118,13 @@ catch (Exception ex)
 string myVirtualIP = reg?.virtual_ip ?? "10.13.37.1";
 Console.WriteLine($"[OK]   Assigned virtual IP: {myVirtualIP}");
 
-// ── 6. Poll until peer joins ──────────────────────────────────
-string peerIP = "127.0.0.1";
-int peerPort = UdpPort;
-string peerVirtualIP = "10.13.37.2";
+// ── 6. Poll until at least one peer joins ────────────────────
+var peers = new List<PlayerInfo>();
 
 Console.WriteLine();
-Console.Write("[*]   Waiting for peer");
-bool peerFound = false;
+Console.Write("[*]   Waiting for peers");
 
-while (!peerFound)
+while (peers.Count == 0)
 {
     try
     {
@@ -135,19 +132,18 @@ while (!peerFound)
 
         if (poll is { status: "ready", players: not null })
         {
-            var peer = poll.players.Find(p =>
+            peers = poll.players.FindAll(p =>
                 !string.Equals(p.player_id, Environment.MachineName, StringComparison.OrdinalIgnoreCase));
 
-            if (peer != null)
+            if (peers.Count > 0)
             {
-                peerIP = peer.ip;
-                peerPort = peer.udp_port;
-                peerVirtualIP = peer.virtual_ip;
-                peerFound = true;
                 Console.WriteLine();
-                Console.WriteLine($"[OK]   Peer found: {peer.player_id}");
-                Console.WriteLine($"       Public IP : {peerIP}:{peerPort}");
-                Console.WriteLine($"       VPN IP    : {peerVirtualIP}");
+                Console.WriteLine($"[OK]   {peers.Count} peer(s) in room:");
+                for (int i = 0; i < peers.Count; i++)
+                {
+                    var p = peers[i];
+                    Console.WriteLine($"       [{i + 1}] {p.player_id,-20} VPN: {p.virtual_ip,-16} Public: {p.ip}:{p.udp_port}");
+                }
             }
         }
     }
@@ -156,11 +152,18 @@ while (!peerFound)
         Console.Write($"!({ex.Message.GetHashCode():X4})");
     }
 
-    if (!peerFound)
+    if (peers.Count == 0)
     {
         Console.Write(".");
         await Task.Delay(2000, CancellationToken.None);
     }
+}
+
+// Build virtual IP → public endpoint map for packet routing
+var ipToPeer = new Dictionary<string, IPEndPoint>();
+foreach (var p in peers)
+{
+    ipToPeer[p.virtual_ip] = new IPEndPoint(IPAddress.Parse(p.ip), p.udp_port);
 }
 
 // ── 7. Goldberg Auto-Patcher (Steam mode only) ────────────────
@@ -217,11 +220,12 @@ if (mode == 1 && gameDir != null)
         Console.Error.WriteLine("       Place steam_api64.dll in ./goldberg/ next to wintun-poc.exe");
     }
 
-    // 7d. Write INI config
+    // 7d. Write INI config (Goldberg only supports one ip=, use first peer)
     string iniPath = Path.Combine(gameDir, "GoldbergSteamEmu.ini");
-    string iniContent = $"[Networking]\nip={peerVirtualIP}\n";
+    string firstPeerVPN = peers.Count > 0 ? peers[0].virtual_ip : "10.13.37.2";
+    string iniContent = $"[Networking]\nip={firstPeerVPN}\n";
     File.WriteAllText(iniPath, iniContent);
-    Console.WriteLine($"[OK]   Goldberg INI written → peer IP: {peerVirtualIP}");
+    Console.WriteLine($"[OK]   Goldberg INI written → peer IP: {firstPeerVPN}");
 
     // 7e. Copy steam_settings + write appid
     string settingsSrc = Path.Combine(AppContext.BaseDirectory, "goldberg", "steam_settings");
@@ -248,31 +252,33 @@ if (mode == 1 && gameDir != null)
     Console.WriteLine("──────────────────────────────────────────────────────");
 }
 
-// ── 8. UDP Hole Punching ──────────────────────────────────────
+// ── 8. UDP Hole Punching (all peers) ──────────────────────────
 Console.WriteLine();
 Console.Write("[*]   Hole punching");
 using var holePunchSock = new UdpClient();
 holePunchSock.Client.SendBufferSize = 64 * 1024;
-
-var peerEndPoint = new IPEndPoint(IPAddress.Parse(peerIP), peerPort);
 byte[] holePunchData = new byte[] { 0x00 };
 int punchCount = 0;
 
-for (int i = 0; i < 10; i++)
+foreach (var p in peers)
 {
     try
     {
-        holePunchSock.Send(holePunchData, holePunchData.Length, peerEndPoint);
-        punchCount++;
-        Console.Write(".");
+        var ep = new IPEndPoint(IPAddress.Parse(p.ip), p.udp_port);
+        for (int i = 0; i < 10; i++)
+        {
+            holePunchSock.Send(holePunchData, holePunchData.Length, ep);
+            punchCount++;
+            Console.Write(".");
+        }
     }
     catch (Exception ex)
     {
         Console.Write($"!({ex.Message.GetHashCode():X4})");
     }
-    await Task.Delay(500, CancellationToken.None);
+    await Task.Delay(100, CancellationToken.None);
 }
-Console.WriteLine($" {punchCount}/10 packets sent");
+Console.WriteLine($" {punchCount} packets sent to {peers.Count} peer(s)");
 
 // ── 9. Driver version ─────────────────────────────────────────
 uint ver = WintunGetRunningDriverVersion();
@@ -314,9 +320,12 @@ RunNetsh($"interface ip set address name=\"{ifAlias}\" source=static addr={myVir
 RunNetsh($"interface set interface name=\"{ifAlias}\" admin=enabled");
 Console.WriteLine($"[OK]   IP {myVirtualIP}/{PrefixLength} assigned, interface UP");
 
-// ── 14. Add route for peer ────────────────────────────────────
-RunRoute($"add {peerVirtualIP} mask 255.255.255.255 {myVirtualIP} metric 1");
-Console.WriteLine($"[OK]   Route added: {peerVirtualIP}/32 → via {myVirtualIP}");
+// ── 14. Add routes for all peers ──────────────────────────────
+foreach (var p in peers)
+{
+    RunRoute($"add {p.virtual_ip} mask 255.255.255.255 {myVirtualIP} metric 1");
+}
+Console.WriteLine($"[OK]   Routes added: {peers.Count} peer(s) → via {myVirtualIP}");
 
 // ── 15. Start Wintun session (Ring Buffer) ────────────────────
 const uint RingCapacity = 0x400000;
@@ -341,7 +350,7 @@ var pumpNetToTun = new Thread(() => PumpNetworkToTun(udp, session, cts.Token))
 {
     Name = "Net→Tun", IsBackground = true
 };
-var pumpTunToNet = new Thread(() => PumpTunToNet(session, peerIP, peerPort, cts.Token))
+var pumpTunToNet = new Thread(() => PumpTunToNet(session, ipToPeer, cts.Token))
 {
     Name = "Tun→Net", IsBackground = true
 };
@@ -380,9 +389,15 @@ else
     Console.WriteLine("║  Virtual LAN ACTIVE — Launch your game manually.     ║");
 Console.WriteLine("║                                                       ║");
 Console.WriteLine($"║  My  IP    : {myVirtualIP}/{PrefixLength,-30}║");
-Console.WriteLine($"║  Peer IP   : {peerVirtualIP}/32                            ║");
-Console.WriteLine($"║  UDP recv  : 0.0.0.0:{UdpPort,-31}║");
-Console.WriteLine($"║  UDP send  : {peerIP}:{peerPort,-31}║");
+Console.WriteLine($"║  Peers     : {peers.Count,-38}║");
+for (int i = 0; i < Math.Min(peers.Count, 5); i++)
+{
+    var p = peers[i];
+    Console.WriteLine($"║    [{i + 1}] {p.player_id,-12} {p.virtual_ip,-16} {p.ip,-16}║");
+}
+if (peers.Count > 5)
+    Console.WriteLine($"║    ... and {peers.Count - 5} more                              ║");
+Console.WriteLine($"║  UDP       : 0.0.0.0:{UdpPort,-31}║");
 Console.WriteLine($"║  Room      : {roomId,-38}║");
 Console.WriteLine($"║  Mode      : {(mode == 1 ? "Steam + Goldberg" : "Pure LAN"),-38}║");
 if (gameProcess != null)
@@ -431,8 +446,9 @@ Console.WriteLine("[OK]   Adapter closed and removed from system.");
 udp.Close();
 Console.WriteLine("[OK]   UDP socket closed.");
 
-RunRoute($"delete {peerVirtualIP}");
-Console.WriteLine("[OK]   Route removed.");
+foreach (var p in peers)
+    RunRoute($"delete {p.virtual_ip}");
+Console.WriteLine($"[OK]   Routes removed ({peers.Count} peers).");
 
 Console.WriteLine("[DONE] Cleanup complete.");
 return 0;
@@ -477,9 +493,8 @@ static void PumpNetworkToTun(UdpClient udp, IntPtr session, CancellationToken ct
     }
 }
 
-static void PumpTunToNet(IntPtr session, string peerIP, int peerPort, CancellationToken ct)
+static void PumpTunToNet(IntPtr session, Dictionary<string, IPEndPoint> ipToPeer, CancellationToken ct)
 {
-    var peer = new IPEndPoint(IPAddress.Parse(peerIP), peerPort);
     using var sock = new UdpClient();
     sock.Client.SendBufferSize = 4 * 1024 * 1024;
 
@@ -510,7 +525,20 @@ static void PumpTunToNet(IntPtr session, string peerIP, int peerPort, Cancellati
 
                 byte[] buffer = new byte[packetSize];
                 Marshal.Copy(packet, buffer, 0, (int)packetSize);
-                sock.Send(buffer, buffer.Length, peer);
+
+                // Parse destination IP from raw IPv4 packet (bytes 16-19)
+                if (buffer.Length >= 20)
+                {
+                    var dstIP = new IPAddress(buffer[16..20]);
+                    string dstStr = dstIP.ToString();
+
+                    if (ipToPeer.TryGetValue(dstStr, out var ep))
+                    {
+                        sock.Send(buffer, buffer.Length, ep);
+                    }
+                    // else: packet for IP not in our peer list — ignore (broadcast, unknown)
+                }
+
                 WintunReleaseReceivePacket(session, packet);
             }
 
