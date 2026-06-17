@@ -32,7 +32,34 @@ public partial class MainWindow : Window
     // Window chrome
     // ════════════════════════════════════════════════════════
 
-    private void TitleBar_Drag(object s, MouseButtonEventArgs e)
+    private bool _engineWired;
+
+    private void WireEngine()
+    {
+        if (_engineWired) return;
+        _engineWired = true;
+        _engine.OnLog += OnEngineLog;
+        _engine.OnStateChanged += OnStateChanged;
+        _engine.OnPeerJoined += OnPeerJoined;
+        _engine.OnPeerLeft += OnPeerLeft;
+        _engine.OnRoomCreated += OnRoomCreated;
+        _chatTimer.Tick += ChatTimer_Tick;
+        _chatTimer.Start();
+    }
+
+    private void UnsubscribeEngine()
+    {
+        _chatTimer.Stop();
+        _chatTimer.Tick -= ChatTimer_Tick;
+        _engine.OnLog -= OnEngineLog;
+        _engine.OnStateChanged -= OnStateChanged;
+        _engine.OnPeerJoined -= OnPeerJoined;
+        _engine.OnPeerLeft -= OnPeerLeft;
+        _engine.OnRoomCreated -= OnRoomCreated;
+        _engineWired = false;
+    }
+
+        private void TitleBar_Drag(object s, MouseButtonEventArgs e)
     { if (e.LeftButton == MouseButtonState.Pressed) DragMove(); }
 
     private void BtnMinimize_Click(object s, RoutedEventArgs e) => WindowState = WindowState.Minimized;
@@ -105,13 +132,7 @@ public partial class MainWindow : Window
 
             // Host setup
             await _engine.HostSetupAsync();
-            _engine.OnLog += OnEngineLog;
-            _engine.OnStateChanged += OnStateChanged;
-            _engine.OnPeerJoined += OnPeerJoined;
-            _engine.OnPeerLeft += OnPeerLeft;
-            _engine.OnRoomCreated += OnRoomCreated;
-            _chatTimer.Tick += ChatTimer_Tick;
-            _chatTimer.Start();
+            WireEngine();
 
             // Show lobby
             ShowLobby();
@@ -195,13 +216,7 @@ public partial class MainWindow : Window
             string? gamePath = await PickGameAsync();
 
             _engine.Configure(1, roomDlg.Answer, gamePath);
-            _engine.OnLog += OnEngineLog;
-            _engine.OnStateChanged += OnStateChanged;
-            _engine.OnPeerJoined += OnPeerJoined;
-            _engine.OnPeerLeft += OnPeerLeft;
-            _engine.OnRoomCreated += OnRoomCreated;
-            _chatTimer.Tick += ChatTimer_Tick;
-            _chatTimer.Start();
+            WireEngine();
 
             ShowLobby();
             TxtLobbyStatus.Text = "Connecting…";
@@ -309,25 +324,26 @@ public partial class MainWindow : Window
         string myName = Environment.MachineName;
         string time = DateTime.Now.ToString("HH:mm");
         AppendChat(myName, text, time);
-        await _engine.SendChatAsync(text);
+        int newId = await _engine.SendChatAsync(text);
+        if (newId > _lastChatId) _lastChatId = newId;
     }
 
     // ════════════════════════════════════════════════════════
     // Disconnect
     // ════════════════════════════════════════════════════════
 
-    private async void BtnDisconnect_Click(object s, RoutedEventArgs e)
+        private async void BtnDisconnect_Click(object s, RoutedEventArgs e)
     {
         await _engine.ShutdownAsync();
+        UnsubscribeEngine();
         ShowWelcome();
         ResetWelcomeButtons();
         LstPlayers.Items.Clear();
         LstChat.Items.Clear();
         LstLog.Items.Clear();
-        TxtDiscovery.Text = "\U0001F50D  Scanning LAN for servers…";
+        TxtDiscovery.Text = "🔍  Scanning LAN for servers…";
         _ = DiscoverLanServersAsync();
     }
-
     private async void Window_Closing(object? s, CancelEventArgs e)
     {
         if (_engine.IsRunning)

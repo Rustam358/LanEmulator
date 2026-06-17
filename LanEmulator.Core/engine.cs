@@ -1,7 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Net;
-
 namespace LanEmulator.Core;
 
 // ── Server API models ─────────────────────────────────────────
@@ -10,6 +6,7 @@ public record RegisterResponse(string status, string room_id, string? virtual_ip
 public record PollResponse(string status, int player_count, List<PlayerInfo>? players);
 public record PlayerInfo(string player_id, string ip, int udp_port, string virtual_ip);
 public record ChatMessage(int id, string player_id, string text, string timestamp);
+public record ChatSendResponse(string status, int id);
 
 // ── Engine events ─────────────────────────────────────────────
 
@@ -459,16 +456,22 @@ public class Engine
         catch { return new(); }
     }
 
-    /// <summary>Send a chat message to the server.</summary>
-    public async Task SendChatAsync(string text)
+    /// <summary>Send a chat message. Returns server-assigned message id, or -1.</summary>
+    public async Task<int> SendChatAsync(string text)
     {
-        if (_http == null) return;
+        if (_http == null) return -1;
         try
         {
             var msg = new { room_id = RoomId, player_id = Environment.MachineName, text };
-            await _http.PostAsJsonAsync("/chat", msg);
+            var resp = await _http.PostAsJsonAsync("/chat", msg);
+            if (resp.IsSuccessStatusCode)
+            {
+                var result = await resp.Content.ReadFromJsonAsync<ChatSendResponse>();
+                return result?.id ?? -1;
+            }
         }
-        catch { /* best-effort */ }
+        catch { }
+        return -1;
     }
 
     /// <summary>Shutdown everything gracefully.</summary>
