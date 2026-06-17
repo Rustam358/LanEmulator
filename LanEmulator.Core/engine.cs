@@ -16,24 +16,6 @@ namespace LanEmulator.Core;
 // ============================================================================
 
 
-// ── Server API models ─────────────────────────────────────────
-
-public record RegisterResponse(string status, string room_id, string? virtual_ip, int player_count);
-public record PollResponse(string status, int player_count, List<PlayerInfo>? players);
-public record PlayerInfo(string player_id, string ip, int udp_port, string virtual_ip);
-public record ChatMessage(int id, string player_id, string text, string timestamp);
-public record ChatSendResponse(string status, int id);
-
-// ── Engine events ─────────────────────────────────────────────
-
-public enum LogLevel { Info, Ok, Warn, Error, PeerJoin, PeerLeft, Chat }
-
-public class LogEntry
-{
-    public LogLevel Level { get; init; }
-    public string Message { get; init; } = "";
-    public DateTime Time { get; init; } = DateTime.Now;
-}
 
 public delegate void LogHandler(LogEntry entry);
 public delegate void StateHandler(string state, string? detail);
@@ -44,7 +26,7 @@ public delegate void ChatHandler(string player, string text, string timestamp);
 /// Central engine for the Wintun LAN Emulator.
 /// Replaces the old top-level Program.cs -- exposes events for GUI.
 /// </summary>
-public class Engine
+public class Engine : IEngine
 {
     public event LogHandler? OnLog;
     public event StateHandler? OnStateChanged;
