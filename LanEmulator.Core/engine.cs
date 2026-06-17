@@ -242,46 +242,49 @@ public class Engine
             throw new Exception($"Cannot reach server: {ServerUrl}\n{ex.Message}");
         }
 
-        // Poll for peers
-        OnStateChanged?.Invoke("waiting_peers", null);
-        int retries = 0;
-        const int maxRetries = 60;
-
-        while (_peers.Count == 0)
+        // Poll for peers (host skips — starts VPN immediately, keepalive handles joins)
+        if (!IsHost)
         {
-            try
-            {
-                var poll = await _http.GetFromJsonAsync<PollResponse>($"/poll?room_id={Uri.EscapeDataString(RoomId)}");
-                if (poll is { status: "ready", players: not null })
-                {
-                    var found = poll.players.FindAll(p =>
-                        !string.Equals(p.player_id, myId, StringComparison.OrdinalIgnoreCase));
-                    if (found.Count > 0)
-                    {
-                        Log(LogLevel.Ok, $"{found.Count} peer(s) connected");
-                        lock (_peerLock)
-                        {
-                            _peers.AddRange(found);
-                            _ipToPeer.Clear();
-                            foreach (var p in _peers)
-                                _ipToPeer[p.virtual_ip] = new IPEndPoint(IPAddress.Parse(p.ip), p.udp_port);
-                        }
-                        PeerCount = found.Count;
-                        foreach (var p in found)
-                            OnPeerJoined?.Invoke(p);
-                    }
-                }
-                retries = 0;
-            }
-            catch (HttpRequestException)
-            {
-                retries++;
-                if (retries >= maxRetries)
-                    throw new Exception($"Server unreachable after {maxRetries * 2}s");
-            }
+            OnStateChanged?.Invoke("waiting_peers", null);
+            int retries = 0;
+            const int maxRetries = 60;
 
-            if (_peers.Count == 0)
-                await Task.Delay(2000);
+            while (_peers.Count == 0)
+            {
+                try
+                {
+                    var poll = await _http.GetFromJsonAsync<PollResponse>($"/poll?room_id={Uri.EscapeDataString(RoomId)}");
+                    if (poll is { status: "ready", players: not null })
+                    {
+                        var found = poll.players.FindAll(p =>
+                            !string.Equals(p.player_id, myId, StringComparison.OrdinalIgnoreCase));
+                        if (found.Count > 0)
+                        {
+                            Log(LogLevel.Ok, $"{found.Count} peer(s) connected");
+                            lock (_peerLock)
+                            {
+                                _peers.AddRange(found);
+                                _ipToPeer.Clear();
+                                foreach (var p in _peers)
+                                    _ipToPeer[p.virtual_ip] = new IPEndPoint(IPAddress.Parse(p.ip), p.udp_port);
+                            }
+                            PeerCount = found.Count;
+                            foreach (var p in found)
+                                OnPeerJoined?.Invoke(p);
+                        }
+                    }
+                    retries = 0;
+                }
+                catch (HttpRequestException)
+                {
+                    retries++;
+                    if (retries >= maxRetries)
+                        throw new Exception($"Server unreachable after {maxRetries * 2}s");
+                }
+
+                if (_peers.Count == 0)
+                    await Task.Delay(2000);
+            }
         }
     }
 
