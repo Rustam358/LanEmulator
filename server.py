@@ -88,6 +88,7 @@ async def poll(room_id: str = Query(..., description="Room ID to check")):
     # If caller is the first player, return second; if caller is second, return first
     return {
         "status": "ready",
+        "player_count": len(players),
         "players": [
             {
                 "player_id": pid,
