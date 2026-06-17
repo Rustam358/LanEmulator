@@ -16,7 +16,7 @@ using System.Threading;
 using System.Threading.Tasks;
 
 // ═══════════════════════════════════════════════════════════════
-// Wintun Virtual LAN Emulator — Step 5: Goldberg Auto-Patcher
+// Wintun Virtual LAN Emulator — Step 7: Multi-peer (up to 20)
 // .NET 8 | x64 only | Requires Administrator
 // ═══════════════════════════════════════════════════════════════
 
@@ -41,7 +41,7 @@ if (!File.Exists(wintunPath))
     return 2;
 }
 
-Console.WriteLine("=== Wintun LAN Emulator — Step 6 (Dual Mode) ===");
+Console.WriteLine("=== Wintun LAN Emulator — Step 7 (Multi-peer) ===");
 Console.WriteLine($"    Adapter : {AdapterName}");
 Console.WriteLine($"    IP      : assigned by server");
 Console.WriteLine($"    UDP     : 0.0.0.0:{UdpPort}");
@@ -96,7 +96,7 @@ if (mode == 1)
     }
 }
 
-// ── 5. Register with signaling server ─────────────────────────
+// ── 5b. Register with signaling server ────────────────────────
 using var http = new HttpClient { BaseAddress = new Uri(SignalServerUrl) };
 http.Timeout = TimeSpan.FromSeconds(10);
 
@@ -180,7 +180,6 @@ if (mode == 1 && gameDir != null)
     string? appId = AutoDetectAppId(gameDir, gameExePath!);
     if (string.IsNullOrEmpty(appId) || appId == "0")
     {
-        // Try Steam API lookup by game folder name
         string gameName = Path.GetFileName(gameDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
         appId = await SteamSearchAppId(http, gameName);
     }
@@ -246,17 +245,20 @@ if (mode == 1 && gameDir != null)
         Directory.CreateDirectory(settingsDst);
     }
 
-    // Write detected AppID
     File.WriteAllText(Path.Combine(settingsDst, "steam_appid.txt"), appId);
     Console.WriteLine($"[OK]   steam_appid.txt → {appId}");
     Console.WriteLine("──────────────────────────────────────────────────────");
 }
 
-// ── 8. UDP Hole Punching (all peers) ──────────────────────────
+// ── 8. Create UDP socket (shared: hole punch + pumps) ─────────
+using var udp = new UdpClient(UdpPort);
+udp.Client.ReceiveBufferSize = 4 * 1024 * 1024;
+udp.Client.SendBufferSize    = 4 * 1024 * 1024;
+Console.WriteLine($"[OK]   UDP socket bound to 0.0.0.0:{UdpPort}");
+
+// ── 9. UDP Hole Punching (all peers) ──────────────────────────
 Console.WriteLine();
 Console.Write("[*]   Hole punching");
-using var holePunchSock = new UdpClient();
-holePunchSock.Client.SendBufferSize = 64 * 1024;
 byte[] holePunchData = new byte[] { 0x00 };
 int punchCount = 0;
 
@@ -267,7 +269,7 @@ foreach (var p in peers)
         var ep = new IPEndPoint(IPAddress.Parse(p.ip), p.udp_port);
         for (int i = 0; i < 10; i++)
         {
-            holePunchSock.Send(holePunchData, holePunchData.Length, ep);
+            udp.Send(holePunchData, holePunchData.Length, ep);
             punchCount++;
             Console.Write(".");
         }
@@ -280,11 +282,11 @@ foreach (var p in peers)
 }
 Console.WriteLine($" {punchCount} packets sent to {peers.Count} peer(s)");
 
-// ── 9. Driver version ─────────────────────────────────────────
+// ── 10. Driver version ─────────────────────────────────────────
 uint ver = WintunGetRunningDriverVersion();
 Console.WriteLine($"[OK]   Wintun driver v{ver >> 16}.{ver & 0xFFFF}");
 
-// ── 10. Clean stale adapter ───────────────────────────────────
+// ── 11. Clean stale adapter ───────────────────────────────────
 IntPtr existing = WintunOpenAdapter(AdapterName);
 if (existing != IntPtr.Zero)
 {
@@ -293,7 +295,7 @@ if (existing != IntPtr.Zero)
     Thread.Sleep(500);
 }
 
-// ── 11. Create virtual adapter ────────────────────────────────
+// ── 12. Create virtual adapter ────────────────────────────────
 IntPtr adapter = WintunCreateAdapter(AdapterName, "LanEmulator", IntPtr.Zero);
 if (adapter == IntPtr.Zero)
 {
@@ -303,7 +305,7 @@ if (adapter == IntPtr.Zero)
 }
 Console.WriteLine($"[OK]   Adapter '{AdapterName}' created.");
 
-// ── 12. Get LUID → interface alias ────────────────────────────
+// ── 13. Get LUID → interface alias ────────────────────────────
 if (!WintunGetAdapterLUID(adapter, out ulong luid))
 {
     Console.Error.WriteLine($"[FATAL] WintunGetAdapterLUID failed ({Marshal.GetLastWin32Error()})");
@@ -315,19 +317,19 @@ Console.WriteLine($"[OK]   LUID: 0x{luid:X16}");
 string ifAlias = GetInterfaceAlias(luid);
 Console.WriteLine($"[OK]   Interface alias: \"{ifAlias}\"");
 
-// ── 13. Assign IP & bring up ──────────────────────────────────
+// ── 14. Assign IP & bring up ──────────────────────────────────
 RunNetsh($"interface ip set address name=\"{ifAlias}\" source=static addr={myVirtualIP} mask={AdapterMask}");
 RunNetsh($"interface set interface name=\"{ifAlias}\" admin=enabled");
 Console.WriteLine($"[OK]   IP {myVirtualIP}/{PrefixLength} assigned, interface UP");
 
-// ── 14. Add routes for all peers ──────────────────────────────
+// ── 15. Add routes for all peers ──────────────────────────────
 foreach (var p in peers)
 {
     RunRoute($"add {p.virtual_ip} mask 255.255.255.255 {myVirtualIP} metric 1");
 }
 Console.WriteLine($"[OK]   Routes added: {peers.Count} peer(s) → via {myVirtualIP}");
 
-// ── 15. Start Wintun session (Ring Buffer) ────────────────────
+// ── 16. Start Wintun session (Ring Buffer) ────────────────────
 const uint RingCapacity = 0x400000;
 IntPtr session = WintunStartSession(adapter, RingCapacity);
 if (session == IntPtr.Zero)
@@ -339,18 +341,14 @@ if (session == IntPtr.Zero)
 }
 Console.WriteLine($"[OK]   Wintun session started (ring: {RingCapacity / 1024 / 1024} MiB)");
 
-// ── 16. Launch UDP listener + packet pump ─────────────────────
+// ── 17. Launch packet pumps (share the same UDP socket) ───────
 using var cts = new CancellationTokenSource();
-using var udp = new UdpClient(UdpPort);
-udp.Client.ReceiveBufferSize = 4 * 1024 * 1024;
-udp.Client.SendBufferSize    = 4 * 1024 * 1024;
-Console.WriteLine($"[OK]   UDP listening on 0.0.0.0:{UdpPort}");
 
 var pumpNetToTun = new Thread(() => PumpNetworkToTun(udp, session, cts.Token))
 {
     Name = "Net→Tun", IsBackground = true
 };
-var pumpTunToNet = new Thread(() => PumpTunToNet(session, ipToPeer, cts.Token))
+var pumpTunToNet = new Thread(() => PumpTunToNet(udp, session, ipToPeer, cts.Token))
 {
     Name = "Tun→Net", IsBackground = true
 };
@@ -359,7 +357,7 @@ pumpNetToTun.Start();
 pumpTunToNet.Start();
 Console.WriteLine("[OK]   Packet pump threads running");
 
-// ── 17. Launch the game (Steam mode only) ─────────────────────
+// ── 18. Launch the game (Steam mode only) ─────────────────────
 Process? gameProcess = null;
 if (mode == 1 && gameExePath != null)
 {
@@ -378,9 +376,7 @@ if (mode == 1 && gameExePath != null)
     }
 }
 
-// ── 18. Wait ──────────────────────────────────────────────────
-var shutdownEvent = new ManualResetEventSlim(false);
-
+// ── 19. Display & wait for ESC ────────────────────────────────
 Console.WriteLine();
 Console.WriteLine("╔═══════════════════════════════════════════════════════╗");
 if (mode == 1)
@@ -406,14 +402,9 @@ Console.WriteLine("║                                                       ║
 Console.WriteLine("║  Press ESC to shutdown…                              ║");
 Console.WriteLine("╚═══════════════════════════════════════════════════════╝");
 
-// Wait for ESC key
-while (Console.ReadKey(true).Key != ConsoleKey.Escape)
-{
-    // ignore other keys
-}
-shutdownEvent.Set();
+while (Console.ReadKey(true).Key != ConsoleKey.Escape) { }
 
-// ── 19. Cleanup ───────────────────────────────────────────────
+// ── 20. Cleanup ───────────────────────────────────────────────
 Console.WriteLine();
 Console.WriteLine("[*] Shutting down…");
 
@@ -462,7 +453,6 @@ static void PumpNetworkToTun(UdpClient udp, IntPtr session, CancellationToken ct
 {
     try
     {
-        var peer = new IPEndPoint(IPAddress.Any, 0);
         while (!ct.IsCancellationRequested)
         {
             var task = udp.ReceiveAsync(ct);
@@ -493,11 +483,8 @@ static void PumpNetworkToTun(UdpClient udp, IntPtr session, CancellationToken ct
     }
 }
 
-static void PumpTunToNet(IntPtr session, Dictionary<string, IPEndPoint> ipToPeer, CancellationToken ct)
+static void PumpTunToNet(UdpClient udp, IntPtr session, Dictionary<string, IPEndPoint> ipToPeer, CancellationToken ct)
 {
-    using var sock = new UdpClient();
-    sock.Client.SendBufferSize = 4 * 1024 * 1024;
-
     IntPtr readEvent = WintunGetReadWaitEvent(session);
     if (readEvent == IntPtr.Zero)
     {
@@ -507,6 +494,9 @@ static void PumpTunToNet(IntPtr session, Dictionary<string, IPEndPoint> ipToPeer
 
     var waitHandle = new EventWaitHandle(false, EventResetMode.AutoReset);
     waitHandle.SafeWaitHandle = new Microsoft.Win32.SafeHandles.SafeWaitHandle(readEvent, ownsHandle: false);
+
+    // Pre-allocate array to avoid GC pressure in hot loop
+    var readEventArray = new[] { readEvent };
 
     try
     {
@@ -518,8 +508,8 @@ static void PumpTunToNet(IntPtr session, Dictionary<string, IPEndPoint> ipToPeer
                 if (packet == IntPtr.Zero)
                 {
                     int err = Marshal.GetLastWin32Error();
-                    if (err == 259) break;
-                    if (err == 38) return;
+                    if (err == 259) break;   // ring buffer empty
+                    if (err == 38) return;   // session ended
                     break;
                 }
 
@@ -530,19 +520,14 @@ static void PumpTunToNet(IntPtr session, Dictionary<string, IPEndPoint> ipToPeer
                 if (buffer.Length >= 20)
                 {
                     var dstIP = new IPAddress(buffer[16..20]);
-                    string dstStr = dstIP.ToString();
-
-                    if (ipToPeer.TryGetValue(dstStr, out var ep))
-                    {
-                        sock.Send(buffer, buffer.Length, ep);
-                    }
-                    // else: packet for IP not in our peer list — ignore (broadcast, unknown)
+                    if (ipToPeer.TryGetValue(dstIP.ToString(), out var ep))
+                        udp.Send(buffer, buffer.Length, ep);
                 }
 
                 WintunReleaseReceivePacket(session, packet);
             }
 
-            int signaled = (int)WaitForMultipleObjects(1, new[] { readEvent }, false, 500u);
+            int signaled = (int)WaitForMultipleObjects(1, readEventArray, false, 500u);
             if (signaled == unchecked((int)0xFFFFFFFF)) break;
         }
     }
@@ -636,7 +621,7 @@ static string GetInterfaceAlias(ulong luid)
 /// <summary>Try to detect Steam AppID from game folder.</summary>
 static string? AutoDetectAppId(string gameDir, string gameExePath)
 {
-    // 1. steam_appid.txt in game dir (from Steam or previous cracks)
+    // 1. steam_appid.txt in game dir
     string[] candidates =
     {
         Path.Combine(gameDir, "steam_appid.txt"),
@@ -657,7 +642,7 @@ static string? AutoDetectAppId(string gameDir, string gameExePath)
         }
     }
 
-    // 2. Scan original steam_api64.dll for embedded AppID patterns
+    // 2. Scan steam_api64.dll for embedded AppID
     string dllPath = Path.Combine(gameDir, "steam_api64.dll");
     string bakPath = dllPath + ".bak";
     string? scanPath = File.Exists(dllPath) ? dllPath : File.Exists(bakPath) ? bakPath : null;
@@ -702,26 +687,18 @@ static string? AutoDetectAppId(string gameDir, string gameExePath)
     return null;
 }
 
-/// <summary>Extract first numeric value from a string.</summary>
 static string? ExtractNumber(string text)
 {
     var match = System.Text.RegularExpressions.Regex.Match(text, @"\d+");
     return match.Success && match.Value != "0" ? match.Value : null;
 }
 
-/// <summary>Scan DLL binary for Steam AppID pattern.</summary>
 static string? ScanDllForAppId(byte[] dllBytes)
 {
-    // Steam AppIDs are 2-7 digit numbers. Look for them near "steam_appid" or
-    // in the .rdata section (common for steam_api stubs).
-    // Strategy: scan for text strings that are pure numbers in the 100-9999999 range,
-    // then verify they appear in context (near "Steam" or "steam_appid" bytes).
-
     string text = System.Text.Encoding.ASCII.GetString(dllBytes);
     int steamAppIdIdx = text.IndexOf("steam_appid", StringComparison.OrdinalIgnoreCase);
     if (steamAppIdIdx >= 0)
     {
-        // Look for numbers around "steam_appid" reference
         string nearby = text[Math.Max(0, steamAppIdIdx - 32)..Math.Min(text.Length, steamAppIdIdx + 128)];
         var match = System.Text.RegularExpressions.Regex.Match(nearby, @"(\d{2,7})");
         if (match.Success)
@@ -734,7 +711,6 @@ static string? ScanDllForAppId(byte[] dllBytes)
     return null;
 }
 
-/// <summary>Search Steam for a game's AppID. Shows results if multiple found.</summary>
 static async Task<string?> SteamSearchAppId(HttpClient http, string gameName)
 {
     try
@@ -748,11 +724,10 @@ static async Task<string?> SteamSearchAppId(HttpClient http, string gameName)
         if (json.RootElement.GetArrayLength() == 0)
             return null;
 
-        // If exact match on first result, use it
         var results = json.RootElement.EnumerateArray().ToArray();
         if (results.Length == 0) return null;
 
-        // Look for exact name match first
+        // Exact name match first
         foreach (var item in results)
         {
             string? name = item.GetProperty("name").GetString();
@@ -764,7 +739,6 @@ static async Task<string?> SteamSearchAppId(HttpClient http, string gameName)
             }
         }
 
-        // Multiple results — let user pick
         if (results.Length == 1)
         {
             string name = results[0].GetProperty("name").GetString()!;
@@ -773,7 +747,7 @@ static async Task<string?> SteamSearchAppId(HttpClient http, string gameName)
             return appId.ToString();
         }
 
-        // 2+ results: show list
+        // Multiple results: interactive picker
         Console.WriteLine("   Multiple Steam results found:");
         for (int i = 0; i < Math.Min(results.Length, 5); i++)
         {
@@ -792,10 +766,7 @@ static async Task<string?> SteamSearchAppId(HttpClient http, string gameName)
         Console.WriteLine($"[INFO] Selected: {chosenName} → AppID {chosenId}");
         return chosenId.ToString();
     }
-    catch
-    {
-        // Steam API unavailable — fall through to manual entry
-    }
+    catch { }
 
     return null;
 }
@@ -852,8 +823,9 @@ static extern uint WaitForMultipleObjects(
     [MarshalAs(UnmanagedType.Bool)] bool fWaitAll,
     uint dwMilliseconds);
 
+
 // ═══════════════════════════════════════════════════════════════
-// Server models
+// Server models (MUST be last — CS8803)
 // ═══════════════════════════════════════════════════════════════
 
 record RegisterResponse(string status, string room_id, string? virtual_ip, int player_count);

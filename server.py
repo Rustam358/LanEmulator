@@ -69,7 +69,9 @@ async def register(req: RegisterRequest, request: Request):
     room["next_ip"] += 1
     virtual_ip = str(VPN_SUBNET + ip_index)
 
-    public_ip = request.client.host if request.client else "unknown"
+    # Use X-Forwarded-For behind reverse proxy, else direct client IP
+    fwd = request.headers.get("X-Forwarded-For")
+    public_ip = (fwd.split(",")[0].strip() if fwd else None) or (request.client.host if request.client else "unknown")
     room["players"][player_id] = {
         "ip": public_ip,
         "udp_port": req.udp_port,
