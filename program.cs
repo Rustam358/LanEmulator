@@ -67,24 +67,54 @@ if (args.Length > 0 && (args[0] == "--help" || args[0] == "-h" || args[0] == "/?
     return 0;
 }
 
-// ── 4. Wintun driver check ────────────────────────────────────
+// ── 4. Wintun driver — auto-install if missing ────────────────
 uint ver = WintunGetRunningDriverVersion();
 if (ver == 0)
 {
-    Console.WriteLine("╔═══════════════════════════════════════════════════════╗");
-    Console.WriteLine("║  Wintun driver not installed.                        ║");
-    Console.WriteLine("║  Download from: https://www.wintun.net/               ║");
-    Console.WriteLine("║                                                       ║");
-    Console.Write  ("║  Open download page now? [Y/n]: ");
-    string? answer = Console.ReadLine()?.Trim().ToLower();
-    if (answer != "n" && answer != "no")
+    Console.WriteLine("[*]   Wintun driver not installed — attempting auto-install…");
+
+    string msiUrl = "https://download.wireguard.com/windows-client/wireguard-amd64-1.1.msi";
+    string msiPath = Path.Combine(Path.GetTempPath(), "wintun-driver.msi");
+
+    try
     {
-        try { Process.Start(new ProcessStartInfo("https://www.wintun.net/") { UseShellExecute = true }); }
-        catch { Console.Error.WriteLine("[ERR] Could not open browser."); }
+        // Download WireGuard MSI (includes Wintun driver)
+        Console.Write($"[*]   Downloading driver (~6 MB)…");
+        using (var hc = new HttpClient { Timeout = TimeSpan.FromMinutes(2) })
+        {
+            var msiBytes = await hc.GetByteArrayAsync(msiUrl);
+            await File.WriteAllBytesAsync(msiPath, msiBytes);
+        }
+        Console.WriteLine(" OK");
+
+        // Install silently
+        Console.Write("[*]   Installing Wintun driver…");
+        var installPsi = new ProcessStartInfo("msiexec",
+            $"/i \"{msiPath}\" /quiet /norestart")
+        { UseShellExecute = false, CreateNoWindow = true };
+        var installProc = Process.Start(installPsi)!;
+        await installProc.WaitForExitAsync();
+        Console.WriteLine($" OK (exit {installProc.ExitCode})");
+
+        // Cleanup MSI
+        try { File.Delete(msiPath); } catch { }
+
+        // Verify driver loaded
+        ver = WintunGetRunningDriverVersion();
+        if (ver == 0)
+        {
+            Console.Error.WriteLine("[FATAL] Wintun driver still not available after install.");
+            Console.Error.WriteLine("        Please restart your PC and try again.");
+            return 9;
+        }
     }
-    Console.WriteLine("║  After installing, run LanEmulator.exe again.        ║");
-    Console.WriteLine("╚═══════════════════════════════════════════════════════╝");
-    return 9;
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"\n[FATAL] Could not install Wintun driver: {ex.Message}");
+        Console.Error.WriteLine("        Download manually: https://www.wintun.net/");
+        try { File.Delete(msiPath); } catch { }
+        return 9;
+    }
 }
 Console.WriteLine($"[OK]   Wintun driver v{ver >> 16}.{ver & 0xFFFF}");
 
