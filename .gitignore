@@ -3,3 +3,12 @@ obj/
 *.user
 .vs/
 *.suo
+__pycache__/
+*.pyc
+*.ps1
+test-*.py
+find-*.py
+full-report.txt
+reasoning-log.txt
+copy-report.ps1
+extract-dll.ps1
