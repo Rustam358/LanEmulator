@@ -121,8 +121,16 @@ public class Engine
         Log(LogLevel.Info, $"Room ID: {RoomId}");
 
         Log(LogLevel.Info, "Starting built-in signaling server...");
-        _server = new LanServer(ServerHttpPort);
-        _server.Start();
+        try
+        {
+            _server = new LanServer(ServerHttpPort);
+            _server.Start();
+        }
+        catch (Exception ex)
+        {
+            Log(LogLevel.Error, $"Server start failed: {ex.Message}");
+            throw;
+        }
 
         string localIp = GetLocalIP();
         ServerUrl = $"http://{localIp}:{ServerHttpPort}";

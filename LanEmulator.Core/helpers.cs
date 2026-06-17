@@ -2,67 +2,6 @@ namespace LanEmulator.Core;
 
 public static class Helpers
 {
-    /// <summary>Find a working Python interpreter. Returns path or null.</summary>
-    public static string? FindPython()
-    {
-        // Collect all candidate paths
-        var candidates = new List<string>();
-
-        // 1. Known install directories (most reliable — bypass 'where.exe' which finds Store stubs)
-        try
-        {
-            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            string pyBase = Path.Combine(localAppData, "Programs", "Python");
-            if (Directory.Exists(pyBase))
-            {
-                foreach (var dir in Directory.GetDirectories(pyBase))
-                {
-                    string exe = Path.Combine(dir, "python.exe");
-                    if (File.Exists(exe)) candidates.Add(exe);
-                }
-                // Sort descending — prefer newer Python
-                candidates.Sort((a, b) => string.Compare(b, a, StringComparison.OrdinalIgnoreCase));
-            }
-        }
-        catch { } // Directory read may fail on restricted systems
-
-        // 2. 'py' launcher (C:\Windows\py.exe — part of official Python install)
-        const string pyLauncher = @"C:\Windows\py.exe";
-        if (File.Exists(pyLauncher)) candidates.Add(pyLauncher);
-
-        // 3. 'where.exe' fallback (filter out WindowsApps stubs)
-        foreach (string name in new[] { "python", "python3" })
-        {
-            try
-            {
-                var p = Process.Start(new ProcessStartInfo("where.exe", name)
-                { UseShellExecute = false, RedirectStandardOutput = true, CreateNoWindow = true })!;
-                p.WaitForExit(3000);
-                string? line;
-                while ((line = p.StandardOutput.ReadLine()) != null)
-                {
-                    if (!string.IsNullOrEmpty(line) && !line.Contains("WindowsApps") && File.Exists(line))
-                        candidates.Add(line);
-                }
-            }
-            catch { }
-        }
-
-        // Validate: try running "path -c print(1)" — exit code 0 = working Python
-        foreach (string exe in candidates)
-        {
-            try
-            {
-                var test = Process.Start(new ProcessStartInfo(exe, "-c \"print(1)\"")
-                { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true })!;
-                test.WaitForExit(5000);
-                if (test.ExitCode == 0) return exe;
-            }
-            catch { }
-        }
-        return null;
-    }
-
     public static string Win32Msg(int c) => new Win32Exception(c).Message;
 
     public static void RunNetsh(string args)

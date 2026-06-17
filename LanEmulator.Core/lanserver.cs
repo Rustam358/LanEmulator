@@ -45,7 +45,15 @@ public sealed class LanServer : IDisposable
     public void Start()
     {
         _cts = new CancellationTokenSource();
-        _listener.Start();
+        try { _listener.Start(); }
+        catch (HttpListenerException ex)
+        {
+            throw new Exception(
+                $"Cannot start server on port {_port}.\n" +
+                $"Error {ex.ErrorCode}: {ex.Message}\n\n" +
+                "Try: netsh http add urlacl url=http://+:{_port}/ user=Everyone",
+                ex);
+        }
         _ = ListenLoopAsync(_cts.Token);
     }
 
