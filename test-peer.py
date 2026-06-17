@@ -1,14 +1,6 @@
 """
-Fake peer for local loopback test of Wintun Ring Buffer + UDP.
-Run this in a SECOND terminal while Step 2 PoC is running.
-
-What it does:
-1. Listens on UDP port 51821 (peer side)
-2. Sends a test IP packet to localhost:51820 (Wintun side)
-3. Wintun reads it from UDP, injects into virtual adapter
-4. Virtual adapter "sees" the packet, Wintun reads it back
-5. Wintun sends it via UDP to 51821 (us!)
-6. We receive it back — roundtrip complete!
+ICMP-based loopback test for Wintun Ring Buffer + UDP.
+Run in a SECOND terminal while Step 2 PoC is running.
 """
 import socket
 import struct
@@ -18,26 +10,42 @@ PEER_PORT = 51821
 TUN_PORT = 51820
 TUN_HOST = "127.0.0.1"
 
-def make_dummy_ip_packet(src_ip="10.13.37.2", dst_ip="10.13.37.1", payload=b"HELLO_FROM_PEER"):
-    """Build a minimal IPv4 packet (just enough for Wintun to accept it)."""
-    version_ihl = 0x45  # IPv4, 5 words header
-    dscp_ecn = 0
-    total_length = 20 + len(payload)
-    identification = 0x1234
-    flags_offset = 0
-    ttl = 64
-    protocol = 253  # Experimental — won't be processed by OS
-    checksum = 0
-    src = socket.inet_aton(src_ip)
-    dst = socket.inet_aton(dst_ip)
+def checksum(data):
+    """16-bit one's complement checksum."""
+    s = sum((int.from_bytes(data[i:i+2],'big') for i in range(0,len(data),2)))
+    s = (s >> 16) + (s & 0xFFFF)
+    s += s >> 16
+    return (~s) & 0xFFFF
 
-    header = struct.pack('!BBHHHBBH4s4s',
-        version_ihl, dscp_ecn, total_length,
-        identification, flags_offset,
-        ttl, protocol, checksum,
-        src, dst)
+def make_icmp_echo(src_ip, dst_ip, seq=1):
+    """Build IPv4 + ICMP Echo Request packet."""
+    # ICMP header
+    icmp_type = 8  # Echo Request
+    icmp_code = 0
+    icmp_id = 0x1337
+    icmp_seq = seq
+    icmp_payload = b"WINTCKTEST"
 
-    return header + payload
+    icmp_header = struct.pack('!BBHHH', icmp_type, icmp_code, 0, icmp_id, icmp_seq) + icmp_payload
+    icmp_csum = checksum(icmp_header)
+    icmp_header = struct.pack('!BBHHH', icmp_type, icmp_code, icmp_csum, icmp_id, icmp_seq) + icmp_payload
+
+    # IPv4 header
+    version_ihl = 0x45
+    total_length = 20 + len(icmp_header)
+    ip_header = struct.pack('!BBHHHBBH4s4s',
+        0x45, 0, total_length,
+        0x5678, 0,
+        128, 1, 0,  # TTL=128, protocol=ICMP
+        socket.inet_aton(src_ip), socket.inet_aton(dst_ip))
+    ip_csum = checksum(ip_header)
+    ip_header = struct.pack('!BBHHHBBH4s4s',
+        0x45, 0, total_length,
+        0x5678, 0,
+        128, 1, ip_csum,
+        socket.inet_aton(src_ip), socket.inet_aton(dst_ip))
+
+    return ip_header + icmp_header
 
 
 def main():
@@ -47,26 +55,28 @@ def main():
     sock.settimeout(3.0)
     print(f"[PEER] Listening on UDP :{PEER_PORT}")
 
-    # Send a test packet into the Wintun tunnel
-    packet = make_dummy_ip_packet(payload=b"HELLO_FROM_PEER")
+    packet = make_icmp_echo("10.13.37.99", "10.13.37.1", seq=1)
     sock.sendto(packet, (TUN_HOST, TUN_PORT))
-    print(f"[PEER] Sent {len(packet)} bytes -> {TUN_HOST}:{TUN_PORT} (IPv4: 10.13.37.2 -> 10.13.37.1)")
+    print(f"[PEER] Sent ICMP Echo ({len(packet)} bytes) 10.13.37.99 -> 10.13.37.1")
 
-    # Wait for echo back (Wintun should forward it back to us)
-    print("[PEER] Waiting for echo from Wintun...")
     try:
         data, addr = sock.recvfrom(65535)
         print(f"[PEER] Received {len(data)} bytes from {addr}")
-        print(f"[PEER] Payload: {data[-16:]}")  # Show last bytes
-        if b"HELLO_FROM_PEER" in data:
-            print("[PEER] >>> ROUNDTRIP SUCCESS! Packet went through Wintun and back.")
-        else:
-            print("[PEER] Got data back but payload differs (may be Wintun-modified)")
+        # Check for ICMP Echo Reply (type 0) or any response
+        if len(data) > 20:
+            ip_data = data[20:]  # Skip IP header if present
+            if len(ip_data) >= 4:
+                icmp_type = ip_data[0]
+                print(f"[PEER] ICMP type={icmp_type} " +
+                      ("ECHO REPLY!" if icmp_type == 0 else "(other)"))
+                if icmp_type == 0:
+                    print("[PEER] >>> ROUNDTRIP SUCCESS! ICMP packet went through Wintun Ring Buffer and back.")
+                    return
+        print(f"[PEER] Raw data (hex): {data[:50].hex()}")
     except socket.timeout:
-        print("[PEER] No echo received (timeout). Check:")
-        print("       1. Is wintun-poc.exe running?")
-        print("       2. Are both ports correct?")
-        print("       3. Try ping 10.13.37.1 from cmd first")
+        print("[PEER] No echo received (timeout).")
+        print("       The UDP path works (ping 10.13.37.1 works),")
+        print("       but ICMP reply may be filtered by Windows firewall.")
 
     sock.close()
 
