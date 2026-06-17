@@ -292,7 +292,7 @@ public class Engine
     // Phase 4: Goldberg patch + VPN setup
     // ════════════════════════════════════════════════════════
 
-    public void RunGoldberg()
+    public async Task RunGoldbergAsync()
     {
         if (Mode != 1 || GameDir == null) return;
 
@@ -304,17 +304,16 @@ public class Engine
         string? appId = Goldberg.AutoDetectAppId(GameDir, GamePath!);
         if (string.IsNullOrEmpty(appId) || appId == "0")
         {
+            Log(LogLevel.Info, "Searching Steam for AppID…");
             string gameName = Path.GetFileName(GameDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-            // Steam search async — fire and forget with best-effort
-            _ = Task.Run(async () =>
+            try
             {
-                var id = await Goldberg.SteamSearchAppIdAsync(gameName);
-                if (!string.IsNullOrEmpty(id) && id != "0")
-                    Log(LogLevel.Ok, $"Steam AppID: {id}");
-            });
-            appId = "0";
+                var sid = await Goldberg.SteamSearchAppIdAsync(gameName);
+                appId = (!string.IsNullOrEmpty(sid) && sid != "0") ? sid : "0";
+            }
+            catch { appId = "0"; }
         }
-        else Log(LogLevel.Ok, $"Steam AppID: {appId}");
+        Log(LogLevel.Ok, $"Steam AppID: {appId}");
 
         // Backup original
         string backupPath = targetDll + ".bak";

@@ -121,7 +121,7 @@ public partial class MainWindow : Window
             // Connect + VPN
             _engine.Configure(1, _engine.RoomId, gamePath);
             await _engine.ConnectAsync(_engine.ServerUrl);
-            _engine.RunGoldberg();
+            await _engine.RunGoldbergAsync();
             _engine.StartVpn();
             _engine.LaunchGame();
 
@@ -208,7 +208,7 @@ public partial class MainWindow : Window
             TxtLobbyRoom.Text = $"Room: {roomDlg.Answer}";
 
             await _engine.ConnectAsync(serverUrl);
-            _engine.RunGoldberg();
+            await _engine.RunGoldbergAsync();
             _engine.StartVpn();
             _engine.LaunchGame();
 

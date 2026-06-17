@@ -173,7 +173,6 @@ async def health():
 
 
 # ═══ Chat endpoints ═══════════════════════════════════════════
-from pydantic import BaseModel
 
 class ChatMsg(BaseModel):
     room_id: str

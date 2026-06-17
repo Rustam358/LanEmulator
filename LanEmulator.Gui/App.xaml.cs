@@ -15,7 +15,14 @@ public partial class App : Application
         {
             MessageBox.Show("Another instance of LanEmulator is already running.",
                 "LanEmulator", MessageBoxButton.OK, MessageBoxImage.Information);
+            _mutex?.Dispose();
             Shutdown();
         }
+    }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        _mutex?.Dispose();
+        base.OnExit(e);
     }
 }
