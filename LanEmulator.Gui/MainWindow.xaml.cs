@@ -1,10 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
-using System.Text;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Shapes;
 using System.Windows.Threading;
 using Microsoft.Win32;
 using LanEmulator.Core;
@@ -16,118 +19,253 @@ public partial class MainWindow : Window
     private readonly Engine _engine = new();
     private readonly DispatcherTimer _chatTimer = new() { Interval = TimeSpan.FromSeconds(2) };
     private int _lastChatId;
+    private bool _isConnecting;
 
     public MainWindow()
     {
         InitializeComponent();
-        Title = $"LanEmulator v{Engine.Version}";
-
-        // Wire engine events
-        _engine.OnLog += OnEngineLog;
-        _engine.OnStateChanged += OnStateChanged;
-        _engine.OnPeerJoined += OnPeerJoined;
-        _engine.OnPeerLeft += OnPeerLeft;
-        _engine.OnRoomCreated += OnRoomCreated;
-
-        _chatTimer.Tick += ChatTimer_Tick;
-        _chatTimer.Start();
+        // Start LAN discovery in background
+        _ = DiscoverLanServersAsync();
     }
 
-    // ═══════════════════════════════════════
-    // Engine events → UI
-    // ═══════════════════════════════════════
+    // ════════════════════════════════════════════════════════
+    // Window chrome
+    // ════════════════════════════════════════════════════════
 
-    private void OnEngineLog(LogEntry e)
+    private void TitleBar_Drag(object s, MouseButtonEventArgs e)
+    { if (e.LeftButton == MouseButtonState.Pressed) DragMove(); }
+
+    private void BtnMinimize_Click(object s, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+    private void BtnClose_Click(object s, RoutedEventArgs e) => Application.Current.Shutdown();
+
+    // ════════════════════════════════════════════════════════
+    // Page navigation
+    // ════════════════════════════════════════════════════════
+
+    private void ShowWelcome() { WelcomePage.Visibility = Visibility.Visible; LobbyPage.Visibility = Visibility.Collapsed; }
+    private void ShowLobby() { WelcomePage.Visibility = Visibility.Collapsed; LobbyPage.Visibility = Visibility.Visible; }
+
+    // ════════════════════════════════════════════════════════
+    // LAN discovery
+    // ════════════════════════════════════════════════════════
+
+    private async Task DiscoverLanServersAsync()
     {
-        Dispatcher.Invoke(() =>
+        try
         {
-            var brush = e.Level switch
+            string? found = await Task.Run(Helpers.DiscoverServer);
+            if (!string.IsNullOrEmpty(found) && !_engine.IsRunning)
             {
-                LogLevel.Error => new SolidColorBrush(Color.FromRgb(0xF3, 0x8B, 0xA8)),
-                LogLevel.Warn => new SolidColorBrush(Color.FromRgb(0xF9, 0xE2, 0xAF)),
-                LogLevel.Ok => new SolidColorBrush(Color.FromRgb(0xA6, 0xE3, 0xA1)),
-                LogLevel.Info => new SolidColorBrush(Color.FromRgb(0x89, 0xB4, 0xFA)),
-                LogLevel.PeerJoin => new SolidColorBrush(Color.FromRgb(0xA6, 0xE3, 0xA1)),
-                LogLevel.PeerLeft => new SolidColorBrush(Color.FromRgb(0xF3, 0x8B, 0xA8)),
-                LogLevel.Chat => new SolidColorBrush(Color.FromRgb(0xCD, 0xD6, 0xF4)),
-                _ => new SolidColorBrush(Color.FromRgb(0xCD, 0xD6, 0xF4))
-            };
-
-            LstLog.Items.Add(new { Time = e.Time.ToString("HH:mm:ss"), e.Message, Color = brush });
-            LstLog.ScrollIntoView(LstLog.Items[^1]);
-        });
+                Dispatcher.Invoke(() =>
+                    TxtDiscovery.Text = $"\U0001F50D  Server found on LAN: {found}  [click Join]");
+            }
+        }
+        catch { }
     }
 
-    private void OnStateChanged(string state, string? detail)
+    // ════════════════════════════════════════════════════════
+    // Host / Join
+    // ════════════════════════════════════════════════════════
+
+    private async void BtnHost_Click(object sender, RoutedEventArgs e)
     {
-        Dispatcher.Invoke(() =>
+        if (_isConnecting) return;
+        _isConnecting = true;
+        BtnHostWelcome.IsEnabled = false;
+        BtnJoinWelcome.IsEnabled = false;
+
+        try
         {
-            TxtStatus.Text = state switch
+            // Admin check
+            if (!Engine.IsAdministrator())
             {
-                "host_setup" => "Starting server…",
-                "join_setup" => "Scanning LAN…",
-                "connecting" => $"Connecting to {detail}…",
-                "waiting_peers" => "Waiting for players…",
-                "vpn_starting" => "Setting up VPN…",
-                "running" => $"Connected ({detail})",
-                "shutting_down" => "Shutting down…",
-                _ => state
-            };
+                LogStatic(LogLevel.Error, "Administrator privileges required.\nRight-click LanEmulator.exe → Run as administrator.");
+                ResetWelcomeButtons();
+                return;
+            }
 
-            StatusDot.Fill = state switch
+            // Driver check
+            uint ver = Engine.GetDriverVersion();
+            if (ver == 0)
             {
-                "running" => new SolidColorBrush(Color.FromRgb(0xA6, 0xE3, 0xA1)),
-                "shutting_down" => new SolidColorBrush(Color.FromRgb(0xF3, 0x8B, 0xA8)),
-                _ => new SolidColorBrush(Color.FromRgb(0xF9, 0xE2, 0xAF))
-            };
+                LogStatic(LogLevel.Warn, "Wintun driver not installed. Auto-installing…");
+                bool ok = await Helpers.AutoInstallDriverAsync(msg => LogStatic(LogLevel.Info, msg));
+                ver = Engine.GetDriverVersion();
+                if (ver == 0)
+                {
+                    LogStatic(LogLevel.Error, "Driver not loaded. Restart PC and try again.");
+                    ResetWelcomeButtons();
+                    return;
+                }
+            }
+            LogStatic(LogLevel.Ok, $"Wintun driver v{ver >> 16}.{ver & 0xFFFF}");
 
-            bool connected = state == "running";
-            BtnHost.IsEnabled = !connected;
-            BtnJoin.IsEnabled = !connected;
-            RbSteam.IsEnabled = !connected;
-            RbLan.IsEnabled = !connected;
-            TxtGamePath.IsEnabled = !connected;
-            BtnBrowse.IsEnabled = !connected;
-            BtnDisconnect.Visibility = connected ? Visibility.Visible : Visibility.Collapsed;
-            TxtChatInput.IsEnabled = connected;
-            BtnSendChat.IsEnabled = connected;
-        });
-    }
+            // Game selection
+            string? gamePath = await PickGameAsync();
 
-    private void OnPeerJoined(PlayerInfo peer)
-    {
-        Dispatcher.Invoke(() =>
+            // Host setup
+            await _engine.HostSetupAsync();
+            _engine.OnLog += OnEngineLog;
+            _engine.OnStateChanged += OnStateChanged;
+            _engine.OnPeerJoined += OnPeerJoined;
+            _engine.OnPeerLeft += OnPeerLeft;
+            _engine.OnRoomCreated += OnRoomCreated;
+            _chatTimer.Tick += ChatTimer_Tick;
+            _chatTimer.Start();
+
+            // Show lobby
+            ShowLobby();
+            TxtLobbyStatus.Text = "Starting server…";
+            TxtLobbyRoom.Text = $"Room: {_engine.RoomId}";
+
+            // Connect + VPN
+            _engine.Configure(1, _engine.RoomId, gamePath);
+            await _engine.ConnectAsync(_engine.ServerUrl);
+            _engine.RunGoldberg();
+            _engine.StartVpn();
+            _engine.LaunchGame();
+
+            OnStateChanged("running", _engine.MyVirtualIP);
+            AddPlayerToList($"[{_engine.MyVirtualIP}] {Environment.MachineName} (you) \U0001F451", true);
+        }
+        catch (Exception ex)
         {
-            LstPlayers.Items.Add($"[{peer.virtual_ip}] {peer.player_id}");
-            if (_engine.IsHost)
-                TxtServerUrl.Text = $"Room: {_engine.RoomId}  |  Server: {_engine.ServerUrl}";
-        });
+            LogStatic(LogLevel.Error, ex.Message);
+            ShowWelcome();
+            ResetWelcomeButtons();
+        }
+        _isConnecting = false;
     }
 
-    private void OnPeerLeft(PlayerInfo peer)
+    private async void BtnJoin_Click(object sender, RoutedEventArgs e)
     {
-        Dispatcher.Invoke(() =>
+        if (_isConnecting) return;
+        _isConnecting = true;
+        BtnHostWelcome.IsEnabled = false;
+        BtnJoinWelcome.IsEnabled = false;
+
+        try
         {
-            var item = LstPlayers.Items.Cast<string>()
-                .FirstOrDefault(s => s.Contains(peer.player_id));
-            if (item != null) LstPlayers.Items.Remove(item);
-        });
+            if (!Engine.IsAdministrator())
+            {
+                LogStatic(LogLevel.Error, "Administrator privileges required.");
+                ResetWelcomeButtons();
+                return;
+            }
+
+            uint ver = Engine.GetDriverVersion();
+            if (ver == 0)
+            {
+                LogStatic(LogLevel.Warn, "Wintun driver not installed. Auto-installing…");
+                bool ok = await Helpers.AutoInstallDriverAsync(msg => LogStatic(LogLevel.Info, msg));
+                ver = Engine.GetDriverVersion();
+                if (ver == 0)
+                {
+                    LogStatic(LogLevel.Error, "Driver not loaded. Restart PC.");
+                    ResetWelcomeButtons();
+                    return;
+                }
+            }
+            LogStatic(LogLevel.Ok, $"Wintun driver v{ver >> 16}.{ver & 0xFFFF}");
+
+            // Discover or prompt URL
+            string serverUrl = _engine.JoinSetup();
+            if (string.IsNullOrEmpty(serverUrl))
+            {
+                var dlg = new InputDialog("Server URL", "Enter server URL (e.g. http://192.168.1.50:8000):", this);
+                if (dlg.ShowDialog() != true || string.IsNullOrWhiteSpace(dlg.Answer))
+                {
+                    LogStatic(LogLevel.Error, "Server URL required.");
+                    ResetWelcomeButtons();
+                    return;
+                }
+                serverUrl = dlg.Answer.TrimEnd('/');
+            }
+
+            // Room ID
+            var roomDlg = new InputDialog("Room ID", "Enter the Room ID code from the host:", this);
+            if (roomDlg.ShowDialog() != true || string.IsNullOrWhiteSpace(roomDlg.Answer))
+            {
+                LogStatic(LogLevel.Error, "Room ID required.");
+                ResetWelcomeButtons();
+                return;
+            }
+
+            // Game selection
+            string? gamePath = await PickGameAsync();
+
+            _engine.Configure(1, roomDlg.Answer, gamePath);
+            _engine.OnLog += OnEngineLog;
+            _engine.OnStateChanged += OnStateChanged;
+            _engine.OnPeerJoined += OnPeerJoined;
+            _engine.OnPeerLeft += OnPeerLeft;
+            _engine.OnRoomCreated += OnRoomCreated;
+            _chatTimer.Tick += ChatTimer_Tick;
+            _chatTimer.Start();
+
+            ShowLobby();
+            TxtLobbyStatus.Text = "Connecting…";
+            TxtLobbyRoom.Text = $"Room: {roomDlg.Answer}";
+
+            await _engine.ConnectAsync(serverUrl);
+            _engine.RunGoldberg();
+            _engine.StartVpn();
+            _engine.LaunchGame();
+
+            OnStateChanged("running", _engine.MyVirtualIP);
+            AddPlayerToList($"[{_engine.MyVirtualIP}] {Environment.MachineName} (you)", false);
+        }
+        catch (Exception ex)
+        {
+            LogStatic(LogLevel.Error, ex.Message);
+            ShowWelcome();
+            ResetWelcomeButtons();
+        }
+        _isConnecting = false;
     }
 
-    private void OnRoomCreated(string roomId)
+    private void ResetWelcomeButtons()
+    { _isConnecting = false; BtnHostWelcome.IsEnabled = true; BtnJoinWelcome.IsEnabled = true; }
+
+    private async Task<string?> PickGameAsync()
     {
-        Dispatcher.Invoke(() =>
+        var dlg = new OpenFileDialog
         {
-            TxtRoomId.Text = roomId;
-            TxtStatus.Text = "Room created — waiting…";
-        });
+            Title = "Select game executable",
+            Filter = "Executables (*.exe)|*.exe|All files (*.*)|*.*"
+        };
+        if (dlg.ShowDialog() == true)
+        {
+            TxtSelectedGame.Text = System.IO.Path.GetFileName(dlg.FileName);
+            BtnLaunch.IsEnabled = true;
+            return dlg.FileName;
+        }
+        return null;
     }
 
-    // ═══════════════════════════════════════
-    // Chat timer
-    // ═══════════════════════════════════════
+    // ════════════════════════════════════════════════════════
+    // Manual URL entry
+    // ════════════════════════════════════════════════════════
 
-    private async void ChatTimer_Tick(object? sender, EventArgs e)
+    private void BtnManualUrl_Click(object s, RoutedEventArgs e) => BtnJoin_Click(s, e);
+
+    // ════════════════════════════════════════════════════════
+    // Game browse & launch
+    // ════════════════════════════════════════════════════════
+
+    private async void BtnBrowseGame_Click(object s, RoutedEventArgs e)
+    {
+        var path = await PickGameAsync();
+        if (path != null) _engine.SetGamePath(path);
+    }
+
+    private void BtnLaunch_Click(object s, RoutedEventArgs e) => _engine.LaunchGame();
+
+    // ════════════════════════════════════════════════════════
+    // Chat
+    // ════════════════════════════════════════════════════════
+
+    private async void ChatTimer_Tick(object? s, EventArgs e)
     {
         if (!_engine.IsRunning) return;
         try
@@ -136,218 +274,61 @@ public partial class MainWindow : Window
             foreach (var m in msgs)
             {
                 _lastChatId = m.id;
-                Dispatcher.Invoke(() =>
-                {
-                    var display = $"[{m.timestamp}] {m.player_id}: {m.text}";
-                    LstChat.Items.Add(display);
-                    LstChat.ScrollIntoView(LstChat.Items[^1]);
-                });
+                Dispatcher.Invoke(() => AppendChat(m.player_id, m.text, m.timestamp));
             }
         }
-        catch { /* network hiccup */ }
+        catch { }
     }
 
-    private async void TxtChatInput_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    private void AppendChat(string player, string text, string time)
     {
-        if (e.Key == System.Windows.Input.Key.Enter)
+        var item = new TextBlock
         {
-            await SendChat();
-            e.Handled = true;
-        }
+            Text = $"[{time}] {player}: {text}",
+            Foreground = new SolidColorBrush(Color.FromRgb(0xCD, 0xD6, 0xF4)),
+            FontSize = 12,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 1, 0, 1)
+        };
+        LstChat.Items.Add(item);
+        LstChat.ScrollIntoView(LstChat.Items[^1]);
     }
 
-    private async void BtnSendChat_Click(object sender, RoutedEventArgs e) => await SendChat();
+    private async void TxtChatInput_KeyDown(object s, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter) { await SendChat(); e.Handled = true; }
+    }
+
+    private async void BtnSendChat_Click(object s, RoutedEventArgs e) => await SendChat();
 
     private async Task SendChat()
     {
         string text = TxtChatInput.Text.Trim();
         if (string.IsNullOrEmpty(text)) return;
-
         TxtChatInput.Text = "";
         string myName = Environment.MachineName;
         string time = DateTime.Now.ToString("HH:mm");
-
-        LstChat.Items.Add($"[{time}] {myName}: {text}");
-        LstChat.ScrollIntoView(LstChat.Items[^1]);
-
+        AppendChat(myName, text, time);
         await _engine.SendChatAsync(text);
     }
 
-    // ═══════════════════════════════════════
-    // Button handlers
-    // ═══════════════════════════════════════
+    // ════════════════════════════════════════════════════════
+    // Disconnect
+    // ════════════════════════════════════════════════════════
 
-    private async void BtnHost_Click(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            BtnHost.IsEnabled = false;
-            BtnJoin.IsEnabled = false;
-
-            // Check admin
-            if (!Engine.IsAdministrator())
-            {
-                LogStatic(LogLevel.Error, "Administrator privileges required. Restart as admin.");
-                BtnHost.IsEnabled = true;
-                BtnJoin.IsEnabled = true;
-                return;
-            }
-
-            // Check Wintun driver
-            uint ver = Engine.GetDriverVersion();
-            if (ver == 0)
-            {
-                LogStatic(LogLevel.Warn, "Wintun driver not installed. Attempting auto-install…");
-                bool ok = await Helpers.AutoInstallDriverAsync(msg => LogStatic(LogLevel.Info, msg));
-                ver = Engine.GetDriverVersion();
-                if (ver == 0)
-                {
-                    LogStatic(LogLevel.Error, "Driver not loaded. Restart PC and try again.");
-                    BtnHost.IsEnabled = true;
-                    BtnJoin.IsEnabled = true;
-                    return;
-                }
-            }
-            LogStatic(LogLevel.Ok, $"Wintun driver v{ver >> 16}.{ver & 0xFFFF}");
-
-            // Host setup
-            await _engine.HostSetupAsync();
-
-            // Continue to connect
-            await ConnectAndStart();
-        }
-        catch (Exception ex)
-        {
-            LogStatic(LogLevel.Error, ex.Message);
-            BtnHost.IsEnabled = true;
-            BtnJoin.IsEnabled = true;
-        }
-    }
-
-    private async void BtnJoin_Click(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            BtnHost.IsEnabled = false;
-            BtnJoin.IsEnabled = false;
-
-            if (!Engine.IsAdministrator())
-            {
-                LogStatic(LogLevel.Error, "Administrator privileges required.");
-                BtnHost.IsEnabled = true;
-                BtnJoin.IsEnabled = true;
-                return;
-            }
-
-            uint ver = Engine.GetDriverVersion();
-            if (ver == 0)
-            {
-                LogStatic(LogLevel.Warn, "Wintun driver not installed. Attempting auto-install…");
-                bool ok = await Helpers.AutoInstallDriverAsync(msg => LogStatic(LogLevel.Info, msg));
-                ver = Engine.GetDriverVersion();
-                if (ver == 0)
-                {
-                    LogStatic(LogLevel.Error, "Driver not loaded. Restart PC and try again.");
-                    BtnHost.IsEnabled = true;
-                    BtnJoin.IsEnabled = true;
-                    return;
-                }
-            }
-            LogStatic(LogLevel.Ok, $"Wintun driver v{ver >> 16}.{ver & 0xFFFF}");
-
-            // Discover server
-            string serverUrl = _engine.JoinSetup();
-            if (string.IsNullOrEmpty(serverUrl))
-            {
-                // Prompt user
-                var dialog = new InputDialog("Server URL", "Enter server URL (e.g. http://192.168.1.50:8000):");
-                if (dialog.ShowDialog() != true || string.IsNullOrWhiteSpace(dialog.Answer))
-                {
-                    LogStatic(LogLevel.Error, "Server URL required to join.");
-                    BtnHost.IsEnabled = true;
-                    BtnJoin.IsEnabled = true;
-                    return;
-                }
-                serverUrl = dialog.Answer.TrimEnd('/');
-            }
-
-            // Prompt for Room ID
-            var roomDialog = new InputDialog("Room ID", "Enter Room ID code:");
-            if (roomDialog.ShowDialog() != true || string.IsNullOrWhiteSpace(roomDialog.Answer))
-            {
-                LogStatic(LogLevel.Error, "Room ID is required.");
-                BtnHost.IsEnabled = true;
-                BtnJoin.IsEnabled = true;
-                return;
-            }
-
-            _engine.Configure(
-                RbSteam.IsChecked == true ? 1 : 2,
-                roomDialog.Answer,
-                string.IsNullOrWhiteSpace(TxtGamePath.Text) ? null : TxtGamePath.Text);
-
-            TxtServerUrl.Text = serverUrl;
-            await ConnectAndStart();
-        }
-        catch (Exception ex)
-        {
-            LogStatic(LogLevel.Error, ex.Message);
-            BtnHost.IsEnabled = true;
-            BtnJoin.IsEnabled = true;
-        }
-    }
-
-    private async Task ConnectAndStart()
-    {
-        // If host, configure + start VPN directly
-        if (_engine.IsHost)
-        {
-            _engine.Configure(
-                RbSteam.IsChecked == true ? 1 : 2,
-                _engine.RoomId,
-                string.IsNullOrWhiteSpace(TxtGamePath.Text) ? null : TxtGamePath.Text);
-
-            await _engine.ConnectAsync(_engine.ServerUrl);
-            _engine.RunGoldberg();
-            _engine.StartVpn();
-            _engine.LaunchGame();
-
-            TxtMyIp.Text = $"My IP: {_engine.MyVirtualIP}";
-            TxtServerUrl.Text = $"Room: {_engine.RoomId}  |  Server: {_engine.ServerUrl}";
-        }
-        else
-        {
-            await _engine.ConnectAsync(TxtServerUrl.Text);
-            _engine.RunGoldberg();
-            _engine.StartVpn();
-            _engine.LaunchGame();
-
-            TxtMyIp.Text = $"My IP: {_engine.MyVirtualIP}";
-            TxtRoomId.Text = _engine.RoomId;
-        }
-
-        // Add myself to players list
-        LstPlayers.Items.Add($"[{_engine.MyVirtualIP}] {Environment.MachineName} (you)");
-    }
-
-    private void BtnBrowse_Click(object sender, RoutedEventArgs e)
-    {
-        var dialog = new OpenFileDialog
-        {
-            Title = "Select game executable",
-            Filter = "Executables (*.exe)|*.exe|All files (*.*)|*.*"
-        };
-        if (dialog.ShowDialog() == true)
-            TxtGamePath.Text = dialog.FileName;
-    }
-
-    private async void BtnDisconnect_Click(object sender, RoutedEventArgs e)
+    private async void BtnDisconnect_Click(object s, RoutedEventArgs e)
     {
         await _engine.ShutdownAsync();
-        ResetUi();
+        ShowWelcome();
+        ResetWelcomeButtons();
+        LstPlayers.Items.Clear();
+        LstChat.Items.Clear();
+        LstLog.Items.Clear();
+        TxtDiscovery.Text = "\U0001F50D  Scanning LAN for servers…";
+        _ = DiscoverLanServersAsync();
     }
 
-    private async void Window_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
+    private async void Window_Closing(object? s, CancelEventArgs e)
     {
         if (_engine.IsRunning)
         {
@@ -357,81 +338,174 @@ public partial class MainWindow : Window
         }
     }
 
-    private void Mode_Changed(object sender, RoutedEventArgs e)
-    {
-        // Guard: called during XAML init before constructor completes
-        if (_engine == null || !IsLoaded) return;
-        TxtGamePath.IsEnabled = RbSteam.IsChecked == true && !_engine.IsRunning;
-        BtnBrowse.IsEnabled = TxtGamePath.IsEnabled;
-    }
+    // ════════════════════════════════════════════════════════
+    // Engine events
+    // ════════════════════════════════════════════════════════
 
-    private void ResetUi()
+    private void OnEngineLog(LogEntry e) => Dispatcher.Invoke(() =>
     {
-        TxtStatus.Text = "Not connected";
-        StatusDot.Fill = new SolidColorBrush(Color.FromRgb(0xF9, 0xE2, 0xAF));
-        TxtRoomId.Text = "";
-        TxtServerUrl.Text = "";
-        TxtMyIp.Text = "";
-        LstPlayers.Items.Clear();
-        LstChat.Items.Clear();
-        BtnHost.IsEnabled = true;
-        BtnJoin.IsEnabled = true;
-        BtnDisconnect.Visibility = Visibility.Collapsed;
-        TxtChatInput.IsEnabled = false;
-        BtnSendChat.IsEnabled = false;
-        RbSteam.IsEnabled = true;
-        RbLan.IsEnabled = true;
-        TxtGamePath.IsEnabled = RbSteam.IsChecked == true;
-        BtnBrowse.IsEnabled = TxtGamePath.IsEnabled;
-    }
+        var brush = e.Level switch
+        {
+            LogLevel.Error => new SolidColorBrush(Color.FromRgb(0xF3, 0x8B, 0xA8)),
+            LogLevel.Warn => new SolidColorBrush(Color.FromRgb(0xF9, 0xE2, 0xAF)),
+            LogLevel.Ok => new SolidColorBrush(Color.FromRgb(0xA6, 0xE3, 0xA1)),
+            LogLevel.Info => new SolidColorBrush(Color.FromRgb(0x89, 0xB4, 0xFA)),
+            LogLevel.PeerJoin => new SolidColorBrush(Color.FromRgb(0xA6, 0xE3, 0xA1)),
+            LogLevel.PeerLeft => new SolidColorBrush(Color.FromRgb(0xF3, 0x8B, 0xA8)),
+            _ => new SolidColorBrush(Color.FromRgb(0xCD, 0xD6, 0xF4))
+        };
+        var item = new TextBlock
+        {
+            Text = $"{e.Time:HH:mm:ss}  {e.Message}",
+            Foreground = brush,
+            FontFamily = new FontFamily("Consolas"),
+            FontSize = 11,
+            Margin = new Thickness(0, 1, 0, 1)
+        };
+        LstLog.Items.Add(item);
+        LstLog.ScrollIntoView(LstLog.Items[^1]);
+    });
 
-    /// <summary>Log a message directly (before engine is started).</summary>
-    private void LogStatic(LogLevel level, string msg)
+    private void OnStateChanged(string state, string? detail)
     {
         Dispatcher.Invoke(() =>
         {
-            var brush = level switch
+            TxtLobbyStatus.Text = state switch
             {
-                LogLevel.Error => new SolidColorBrush(Color.FromRgb(0xF3, 0x8B, 0xA8)),
-                LogLevel.Warn => new SolidColorBrush(Color.FromRgb(0xF9, 0xE2, 0xAF)),
-                LogLevel.Ok => new SolidColorBrush(Color.FromRgb(0xA6, 0xE3, 0xA1)),
-                LogLevel.Info => new SolidColorBrush(Color.FromRgb(0x89, 0xB4, 0xFA)),
-                _ => new SolidColorBrush(Color.FromRgb(0xCD, 0xD6, 0xF4))
+                "connecting" => "Connecting…",
+                "waiting_peers" => "Waiting for players…",
+                "vpn_starting" => "Setting up VPN…",
+                "running" => "Connected",
+                "shutting_down" => "Leaving…",
+                _ => state
             };
-            LstLog.Items.Add(new { Time = DateTime.Now.ToString("HH:mm:ss"), Message = msg, Color = brush });
-            LstLog.ScrollIntoView(LstLog.Items[^1]);
+            StatusDot.Fill = state switch
+            {
+                "running" => new SolidColorBrush(Color.FromRgb(0xA6, 0xE3, 0xA1)),
+                "shutting_down" => new SolidColorBrush(Color.FromRgb(0xF3, 0x8B, 0xA8)),
+                _ => new SolidColorBrush(Color.FromRgb(0xF9, 0xE2, 0xAF))
+            };
+            if (state == "running" && detail != null)
+                TxtLobbyIp.Text = detail;
         });
     }
+
+    private void OnPeerJoined(PlayerInfo peer) => Dispatcher.Invoke(() =>
+    {
+        AddPlayerToList($"[{peer.virtual_ip}] {peer.player_id}", false);
+        TxtPlayerCount.Text = $"({_engine.PeerCount + 1}/20)";
+    });
+
+    private void OnPeerLeft(PlayerInfo peer) => Dispatcher.Invoke(() =>
+    {
+        RemovePlayerFromList(peer.player_id);
+        TxtPlayerCount.Text = $"({Math.Max(0, _engine.PeerCount)}/20)";
+    });
+
+    private void OnRoomCreated(string roomId) => Dispatcher.Invoke(() =>
+    {
+        TxtLobbyRoom.Text = $"Room: {roomId}";
+    });
+
+    private void AddPlayerToList(string text, bool isHost)
+    {
+        var sp = new StackPanel { Orientation = Orientation.Horizontal };
+        sp.Children.Add(new Ellipse
+        {
+            Width = 8, Height = 8,
+            Fill = new SolidColorBrush(Color.FromRgb(0xA6, 0xE3, 0xA1)),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 8, 0)
+        });
+        sp.Children.Add(new TextBlock
+        {
+            Text = text,
+            Foreground = new SolidColorBrush(Color.FromRgb(0xCD, 0xD6, 0xF4)),
+            FontSize = 13,
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        if (isHost)
+            sp.Children.Add(new TextBlock
+            {
+                Text = " HOST",
+                Foreground = new SolidColorBrush(Color.FromRgb(0xF9, 0xE2, 0xAF)),
+                FontSize = 10,
+                VerticalAlignment = VerticalAlignment.Center
+            });
+        LstPlayers.Items.Add(sp);
+    }
+
+    private void RemovePlayerFromList(string playerId)
+    {
+        foreach (StackPanel item in LstPlayers.Items)
+        {
+            foreach (var child in item.Children)
+                if (child is TextBlock tb && tb.Text.Contains(playerId))
+                { LstPlayers.Items.Remove(item); return; }
+        }
+    }
+
+    /// <summary>Log a message before engine starts (welcome page).</summary>
+    private void LogStatic(LogLevel level, string msg) => Dispatcher.Invoke(() =>
+    {
+        var brush = level switch
+        {
+            LogLevel.Error => new SolidColorBrush(Color.FromRgb(0xF3, 0x8B, 0xA8)),
+            LogLevel.Warn => new SolidColorBrush(Color.FromRgb(0xF9, 0xE2, 0xAF)),
+            LogLevel.Ok => new SolidColorBrush(Color.FromRgb(0xA6, 0xE3, 0xA1)),
+            LogLevel.Info => new SolidColorBrush(Color.FromRgb(0x89, 0xB4, 0xFA)),
+            _ => new SolidColorBrush(Color.FromRgb(0xCD, 0xD6, 0xF4))
+        };
+        var item = new TextBlock
+        {
+            Text = $"{DateTime.Now:HH:mm:ss}  {msg}",
+            Foreground = brush,
+            FontFamily = new FontFamily("Consolas"),
+            FontSize = 11,
+            Margin = new Thickness(0, 1, 0, 1)
+        };
+        LstLog.Items.Add(item);
+        LstLog.ScrollIntoView(LstLog.Items[^1]);
+    });
 }
 
-/// <summary>Simple modal dialog for text input.</summary>
+/// <summary>Dark-themed modal dialog for text input.</summary>
 public class InputDialog : Window
 {
     public string Answer { get; private set; } = "";
     private readonly TextBox _txt;
 
-    public InputDialog(string title, string prompt)
+    public InputDialog(string title, string prompt, Window owner)
     {
         Title = title;
-        Width = 400;
+        Width = 420;
         Height = 170;
+        WindowStyle = WindowStyle.None;
+        AllowsTransparency = true;
+        Background = Brushes.Transparent;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         ResizeMode = ResizeMode.NoResize;
-        Background = new SolidColorBrush(Color.FromRgb(0x1E, 0x1E, 0x2E));
-        Foreground = new SolidColorBrush(Color.FromRgb(0xCD, 0xD6, 0xF4));
-        FontFamily = new System.Windows.Media.FontFamily("Segoe UI");
-        FontSize = 13;
+        Owner = owner;
 
-        var grid = new Grid { Margin = new Thickness(12) };
-        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(30) });
-        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(30) });
-        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(30) });
-
-        var lbl = new Label
+        var border = new Border
         {
-            Content = prompt,
+            Background = new SolidColorBrush(Color.FromRgb(0x28, 0x28, 0x40)),
+            CornerRadius = new CornerRadius(10),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(0x45, 0x47, 0x5A)),
+            BorderThickness = new Thickness(1)
+        };
+
+        var grid = new Grid { Margin = new Thickness(16) };
+        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(24) });
+        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(36) });
+        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(36) });
+
+        var lbl = new TextBlock
+        {
+            Text = prompt,
             Foreground = new SolidColorBrush(Color.FromRgb(0x6C, 0x70, 0x86)),
-            FontSize = 12
+            FontSize = 12,
+            Margin = new Thickness(0, 0, 0, 6)
         };
         Grid.SetRow(lbl, 0);
         grid.Children.Add(lbl);
@@ -442,39 +516,46 @@ public class InputDialog : Window
             Foreground = new SolidColorBrush(Color.FromRgb(0xCD, 0xD6, 0xF4)),
             BorderBrush = new SolidColorBrush(Color.FromRgb(0x45, 0x47, 0x5A)),
             CaretBrush = new SolidColorBrush(Color.FromRgb(0xCD, 0xD6, 0xF4)),
-            FontSize = 14
+            FontSize = 15,
+            VerticalContentAlignment = VerticalAlignment.Center
         };
-        _txt.KeyDown += (s, e) => { if (e.Key == System.Windows.Input.Key.Enter) { Answer = _txt.Text; DialogResult = true; } };
-        _txt.Loaded += (s, e) => _txt.Focus();
+        _txt.KeyDown += (s, e) => { if (e.Key == Key.Enter) { Answer = _txt.Text; DialogResult = true; } };
+        _txt.Loaded += (s, e) => { _txt.Focus(); _txt.SelectAll(); };
         Grid.SetRow(_txt, 1);
         grid.Children.Add(_txt);
 
         var btnPanel = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
         Grid.SetRow(btnPanel, 2);
 
-        var okBtn = new Button
+        btnPanel.Children.Add(new Button
         {
-            Content = "OK",
-            Width = 70,
+            Content = "OK", Width = 75, Height = 28,
             Margin = new Thickness(0, 6, 6, 0),
             Background = new SolidColorBrush(Color.FromRgb(0x89, 0xB4, 0xFA)),
-            Foreground = new SolidColorBrush(Color.FromRgb(0x1E, 0x1E, 0x2E))
-        };
-        okBtn.Click += (s, e) => { Answer = _txt.Text; DialogResult = true; };
-        btnPanel.Children.Add(okBtn);
+            Foreground = new SolidColorBrush(Color.FromRgb(0x1E, 0x1E, 0x2E)),
+            BorderThickness = new Thickness(0),
+            FontSize = 12, FontWeight = FontWeights.SemiBold,
+            Cursor = Cursors.Hand
+        }.Tap(b => b.Click += (s, e) => { Answer = _txt.Text; DialogResult = true; }));
 
-        var cancelBtn = new Button
+        btnPanel.Children.Add(new Button
         {
-            Content = "Cancel",
-            Width = 70,
+            Content = "Cancel", Width = 75, Height = 28,
             Margin = new Thickness(0, 6, 0, 0),
             Background = new SolidColorBrush(Color.FromRgb(0x45, 0x47, 0x5A)),
-            Foreground = new SolidColorBrush(Color.FromRgb(0xCD, 0xD6, 0xF4))
-        };
-        cancelBtn.Click += (s, e) => { DialogResult = false; };
-        btnPanel.Children.Add(cancelBtn);
+            Foreground = new SolidColorBrush(Color.FromRgb(0xCD, 0xD6, 0xF4)),
+            BorderThickness = new Thickness(0),
+            FontSize = 12, Cursor = Cursors.Hand
+        }.Tap(b => b.Click += (s, e) => DialogResult = false));
 
         grid.Children.Add(btnPanel);
-        Content = grid;
+        border.Child = grid;
+        Content = border;
     }
+}
+
+/// <summary>Fluent helper.</summary>
+public static class UiExt
+{
+    public static T Tap<T>(this T obj, Action<T> action) { action(obj); return obj; }
 }

@@ -429,6 +429,12 @@ public class Engine
         OnStateChanged?.Invoke("running", MyVirtualIP);
     }
 
+    public void SetGamePath(string path)
+    {
+        GamePath = Path.GetFullPath(path);
+        GameDir = Path.GetDirectoryName(GamePath);
+    }
+
     /// <summary>Launch the game executable (Steam mode only).</summary>
     public void LaunchGame()
     {

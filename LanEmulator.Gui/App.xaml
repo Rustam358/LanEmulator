@@ -3,10 +3,10 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              StartupUri="MainWindow.xaml">
     <Application.Resources>
-        <!-- Dark theme -->
+        <!-- Colors -->
         <SolidColorBrush x:Key="BgDark" Color="#1E1E2E"/>
-        <SolidColorBrush x:Key="BgPanel" Color="#282840"/>
-        <SolidColorBrush x:Key="BgInput" Color="#1A1A2E"/>
+        <SolidColorBrush x:Key="BgPanel" Color="#181825"/>
+        <SolidColorBrush x:Key="BgInput" Color="#1E1E2E"/>
         <SolidColorBrush x:Key="FgPrimary" Color="#CDD6F4"/>
         <SolidColorBrush x:Key="FgDim" Color="#6C7086"/>
         <SolidColorBrush x:Key="Accent" Color="#89B4FA"/>
@@ -15,43 +15,110 @@
         <SolidColorBrush x:Key="AccentRed" Color="#F38BA8"/>
         <SolidColorBrush x:Key="BorderColor" Color="#45475A"/>
 
-        <Style TargetType="Window">
-            <Setter Property="Background" Value="{StaticResource BgDark}"/>
-            <Setter Property="Foreground" Value="{StaticResource FgPrimary}"/>
-            <Setter Property="FontFamily" Value="Segoe UI, sans-serif"/>
-            <Setter Property="FontSize" Value="13"/>
-        </Style>
-
-        <Style TargetType="Button">
-            <Setter Property="Background" Value="{StaticResource Accent}"/>
-            <Setter Property="Foreground" Value="{StaticResource BgDark}"/>
-            <Setter Property="BorderBrush" Value="Transparent"/>
-            <Setter Property="Padding" Value="12,6"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-        </Style>
-
         <Style TargetType="TextBox">
             <Setter Property="Background" Value="{StaticResource BgInput}"/>
             <Setter Property="Foreground" Value="{StaticResource FgPrimary}"/>
             <Setter Property="BorderBrush" Value="{StaticResource BorderColor}"/>
             <Setter Property="CaretBrush" Value="{StaticResource FgPrimary}"/>
             <Setter Property="Padding" Value="6,4"/>
+            <Setter Property="FontSize" Value="13"/>
         </Style>
-
         <Style TargetType="ListBox">
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="Foreground" Value="{StaticResource FgPrimary}"/>
             <Setter Property="BorderThickness" Value="0"/>
         </Style>
-
         <Style TargetType="RadioButton">
             <Setter Property="Foreground" Value="{StaticResource FgPrimary}"/>
         </Style>
-
         <Style TargetType="Label">
             <Setter Property="Foreground" Value="{StaticResource FgDim}"/>
             <Setter Property="FontSize" Value="11"/>
+        </Style>
+
+        <Style x:Key="TitleButton" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Foreground" Value="#585B70"/>
+            <Setter Property="Width" Value="36"/>
+            <Setter Property="Height" Value="28"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Cursor" Value="Hand"/>
+        </Style>
+
+        <Style x:Key="BigButton" TargetType="Button">
+            <Setter Property="Background" Value="#282840"/>
+            <Setter Property="Foreground" Value="#CDD6F4"/>
+            <Setter Property="BorderBrush" Value="#45475A"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="10" Padding="20">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#313250"/>
+                    <Setter Property="BorderBrush" Value="#89B4FA"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="SmallButton" TargetType="Button">
+            <Setter Property="Background" Value="#313250"/>
+            <Setter Property="Foreground" Value="#CDD6F4"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+            <Setter Property="Padding" Value="10,4"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                CornerRadius="4" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#45475A"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="LinkButton" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Padding" Value="4,2"/>
+        </Style>
+
+        <Style x:Key="PlayerItemStyle" TargetType="ListBoxItem">
+            <Setter Property="Padding" Value="10,6"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border Background="{TemplateBinding Background}" Padding="8,5"
+                                CornerRadius="4">
+                            <ContentPresenter/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
     </Application.Resources>
 </Application>
