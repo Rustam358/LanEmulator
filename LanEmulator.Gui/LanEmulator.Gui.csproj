@@ -11,13 +11,10 @@
     <Version>1.1.0</Version>
     <AssemblyName>LanEmulator</AssemblyName>
 
-    <!-- Release: single-file exe -->
-    <PublishSingleFile>true</PublishSingleFile>
+    <!-- Release: self-contained folder, then zipped -->
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
-    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
-    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
-    <DebugType>none</DebugType>
-    <DebugSymbols>false</DebugSymbols>
   </PropertyGroup>
 
   <ItemGroup>

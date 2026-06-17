@@ -359,6 +359,8 @@ public partial class MainWindow : Window
 
     private void Mode_Changed(object sender, RoutedEventArgs e)
     {
+        // Guard: called during XAML init before constructor completes
+        if (_engine == null || !IsLoaded) return;
         TxtGamePath.IsEnabled = RbSteam.IsChecked == true && !_engine.IsRunning;
         BtnBrowse.IsEnabled = TxtGamePath.IsEnabled;
     }
