@@ -1,5 +1,21 @@
 namespace LanEmulator.Core;
 
+// ============================================================================
+// Engine -- lifecycle manager for the virtual LAN emulator.
+//
+// Structure:
+//   Types         -- records, enums, delegates
+//   Events        -- OnLog, OnStateChanged, OnPeerJoined/Left
+//   Properties    -- RoomId, ServerUrl, MyVirtualIP, IsHost, etc.
+//   Lifecycle     -- HostSetupAsync -> JoinSetup -> Configure -> ConnectAsync -> StartVpn -> ShutdownAsync
+//   Goldberg      -- RunGoldbergAsync (auto-patch steam_api64.dll)
+//   VPN           -- StartVpn (UDP socket, hole punch, Wintun adapter, packet pumps)
+//   Game          -- SetGamePath, LaunchGame
+//   Chat          -- PollChatAsync, SendChatAsync
+//   Utilities     -- IsAdministrator, GetDriverVersion, GenerateRoomId, GetLocalIP
+// ============================================================================
+
+
 // ── Server API models ─────────────────────────────────────────
 
 public record RegisterResponse(string status, string room_id, string? virtual_ip, int player_count);
@@ -26,7 +42,7 @@ public delegate void ChatHandler(string player, string text, string timestamp);
 
 /// <summary>
 /// Central engine for the Wintun LAN Emulator.
-/// Replaces the old top-level Program.cs — exposes events for GUI.
+/// Replaces the old top-level Program.cs -- exposes events for GUI.
 /// </summary>
 public class Engine
 {
@@ -54,6 +70,9 @@ public class Engine
     public const int UdpPort = 51820;
     public const int DiscoveryPort = 51821;
     public const int ServerHttpPort = 8000;
+    public const int MaxPollRetries = 60;
+    public const int PollIntervalMs = 2000;
+    public const int AdapterReopenDelayMs = 500;
 
     // ── Internal state ──────────────────────────────────────
     private readonly List<PlayerInfo> _peers = new();
@@ -77,6 +96,7 @@ public class Engine
     // Public API
     // ════════════════════════════════════════════════════════
 
+    /// <summary>True if current process has admin rights.</summary>/// <summary>Check if running with Administrator privileges.</summary>
     /// <summary>True if current process has admin rights.</summary>
     public static bool IsAdministrator()
     {
@@ -87,6 +107,7 @@ public class Engine
     /// <summary>Check Wintun driver version. 0 = not installed.</summary>
     public static uint GetDriverVersion() => WintunInterop.WintunGetRunningDriverVersion();
 
+    /// <summary>Generate a readable 6-char Room ID.</summary>/// <summary>Generate a random 6-character alphanumeric room ID.</summary>
     /// <summary>Generate a readable 6-char Room ID.</summary>
     public static string GenerateRoomId()
     {
@@ -95,6 +116,7 @@ public class Engine
         return new string(Enumerable.Range(0, 6).Select(_ => chars[rng.Next(chars.Length)]).ToArray());
     }
 
+    /// <summary>Auto-detect local LAN IPv4 address.</summary>/// <summary>Get the best local IPv4 address for LAN communication.</summary>
     /// <summary>Auto-detect local LAN IPv4 address.</summary>
     public static string GetLocalIP()
     {
@@ -112,6 +134,7 @@ public class Engine
     // Setup phases (called sequentially by GUI)
     // ════════════════════════════════════════════════════════
 
+    /// <summary>Phase 1: Start built-in C# HTTP server (host only). No Python required.</summary>/// <summary>Start built-in HTTP signaling server and open firewall rules.</summary>
     /// <summary>Phase 1: Start built-in C# HTTP server (host only). No Python required.</summary>
     public Task HostSetupAsync()
     {
@@ -145,7 +168,8 @@ public class Engine
         return Task.CompletedTask;
     }
 
-    /// <summary>Phase 1b: Join — discover or enter server URL.</summary>
+    /// <summary>Phase 1b: Join -- discover or enter server URL.</summary>/// <summary>Discover LAN servers via UDP broadcast, or accept CLI-provided URL.</summary>
+    /// <summary>Phase 1b: Join -- discover or enter server URL.</summary>
     public string JoinSetup(string? cliUrl = null)
     {
         IsHost = false;
@@ -164,6 +188,7 @@ public class Engine
         return ""; // GUI will prompt user
     }
 
+    /// <summary>Phase 2: Set mode, room, game path.</summary>/// <summary>Set game mode (Steam+Goldberg / Pure LAN), room ID, and optional game path.</summary>
     /// <summary>Phase 2: Set mode, room, game path.</summary>
     public void Configure(int mode, string roomId, string? gamePath = null)
     {
@@ -178,6 +203,7 @@ public class Engine
         Log(LogLevel.Ok, $"Mode: {(mode == 1 ? "Steam + Goldberg" : "Pure LAN")}");
     }
 
+    /// <summary>Phase 3: Connect to server, register, poll peers, set up VPN.</summary>/// <summary>Connect to signaling server, register, poll for peers, set up VPN routing.</summary>
     /// <summary>Phase 3: Connect to server, register, poll peers, set up VPN.</summary>
     public async Task ConnectAsync(string serverUrl)
     {
@@ -205,7 +231,7 @@ public class Engine
             throw new Exception($"Cannot reach server: {ServerUrl}\n{ex.Message}");
         }
 
-        // Poll for peers (host skips — starts VPN immediately, keepalive handles joins)
+        // Poll for peers (host skips -- starts VPN immediately, keepalive handles joins)
         if (!IsHost)
         {
             OnStateChanged?.Invoke("waiting_peers", null);
@@ -246,7 +272,7 @@ public class Engine
                 }
 
                 if (_peers.Count == 0)
-                    await Task.Delay(2000);
+                    await Task.Delay(PollIntervalMs);
             }
         }
     }
@@ -254,6 +280,7 @@ public class Engine
     // ════════════════════════════════════════════════════════
     // Phase 4: Goldberg patch + VPN setup
     // ════════════════════════════════════════════════════════
+        /// <summary>Auto-detect Steam AppID and deploy Goldberg emulator DLL and INI config.</summary>
 
     public async Task RunGoldbergAsync()
     {
@@ -293,7 +320,7 @@ public class Engine
         string firstPeerVPN;
         lock (_peerLock) { firstPeerVPN = _peers.Count > 0 ? _peers[0].virtual_ip : "10.13.37.2"; }
         File.WriteAllText(Path.Combine(GameDir, "GoldbergSteamEmu.ini"), $"[Networking]\nip={firstPeerVPN}\n");
-        Log(LogLevel.Ok, $"Goldberg INI → peer: {firstPeerVPN}");
+        Log(LogLevel.Ok, $"Goldberg INI -> peer: {firstPeerVPN}");
 
         // steam_settings
         string settingsSrc = Path.Combine(baseDir, "goldberg", "steam_settings");
@@ -313,6 +340,7 @@ public class Engine
         Log(LogLevel.Ok, "steam_settings/ deployed");
     }
 
+    /// <summary>Phase 5: Create adapter, UDP, pumps, keepalive.</summary>/// <summary>Create UDP socket, hole-punch peers, initialize Wintun adapter, start packet pumps.</summary>
     /// <summary>Phase 5: Create adapter, UDP, pumps, keepalive.</summary>
     public void StartVpn()
     {
@@ -341,12 +369,12 @@ public class Engine
             catch (Exception ex) { Log(LogLevel.Warn, $"Hole punch: {ex.Message}"); }
             Thread.Sleep(100);
         }
-        Log(LogLevel.Ok, $"Hole punch → {snapshot.Count} peer(s)");
+        Log(LogLevel.Ok, $"Hole punch -> {snapshot.Count} peer(s)");
 
         // Wintun adapter
         IntPtr existing = WintunInterop.WintunOpenAdapter(AdapterName);
         if (existing != IntPtr.Zero)
-        { WintunInterop.WintunCloseAdapter(existing); Thread.Sleep(500); }
+        { WintunInterop.WintunCloseAdapter(existing); Thread.Sleep(AdapterReopenDelayMs); }
 
         _adapter = WintunInterop.WintunCreateAdapter(AdapterName, "LanEmulator", IntPtr.Zero);
         if (_adapter == IntPtr.Zero)
@@ -354,7 +382,7 @@ public class Engine
             int err = Marshal.GetLastWin32Error();
             string msg = $"CreateAdapter failed. Win32 error {err}: {Helpers.Win32Msg(err)}";
             if (WintunInterop.WintunGetRunningDriverVersion() == 0)
-                msg += "\nDriver not loaded — restart your PC and try again.";
+                msg += "\nDriver not loaded -- restart your PC and try again.";
             throw new Exception(msg);
         }
 
@@ -378,8 +406,8 @@ public class Engine
 
         _cts = new CancellationTokenSource();
 
-        _pumpNetToTun = new Thread(() => Pumps.PumpNetworkToTun(_udp, _session, _cts.Token)) { Name = "Net→Tun", IsBackground = true };
-        _pumpTunToNet = new Thread(() => Pumps.PumpTunToNet(_udp, _session, _ipToPeer, _peerLock, _cts.Token)) { Name = "Tun→Net", IsBackground = true };
+        _pumpNetToTun = new Thread(() => Pumps.PumpNetworkToTun(_udp, _session, _cts.Token)) { Name = "Net->Tun", IsBackground = true };
+        _pumpTunToNet = new Thread(() => Pumps.PumpTunToNet(_udp, _session, _ipToPeer, _peerLock, _cts.Token)) { Name = "Tun->Net", IsBackground = true };
         _pumpNetToTun.Start(); _pumpTunToNet.Start();
         Log(LogLevel.Ok, "Packet pumps running");
 
@@ -397,6 +425,7 @@ public class Engine
         GameDir = Path.GetDirectoryName(GamePath);
     }
 
+    /// <summary>Launch the game executable (Steam mode only).</summary>/// <summary>Launch the configured game executable.</summary>
     /// <summary>Launch the game executable (Steam mode only).</summary>
     public void LaunchGame()
     {
@@ -409,6 +438,7 @@ public class Engine
         catch (Exception ex) { Log(LogLevel.Warn, $"Game launch failed: {ex.Message}"); }
     }
 
+    /// <summary>Subscribe to chat messages from the server.</summary>/// <summary>Poll server for new chat messages since lastId.</summary>
     /// <summary>Subscribe to chat messages from the server.</summary>
     public async Task<List<ChatMessage>> PollChatAsync(int lastId)
     {
@@ -422,6 +452,7 @@ public class Engine
         catch (Exception ex) { Log(LogLevel.Warn, $"Chat poll: {ex.Message}"); return new(); }
     }
 
+    /// <summary>Send a chat message. Returns server-assigned message id, or -1.</summary>/// <summary>Send a chat message to all peers in the room. Returns server-assigned message ID.</summary>
     /// <summary>Send a chat message. Returns server-assigned message id, or -1.</summary>
     public async Task<int> SendChatAsync(string text)
     {
@@ -440,6 +471,7 @@ public class Engine
         return -1;
     }
 
+    /// <summary>Shutdown everything gracefully.</summary>/// <summary>Gracefully stop VPN, kill game process, clean up all resources.</summary>
     /// <summary>Shutdown everything gracefully.</summary>
     public async Task ShutdownAsync()
     {
