@@ -501,10 +501,8 @@ public partial class MainWindow : Window
             FontSize = 11,
             Margin = new Thickness(0, 1, 0, 1)
         };
-        LstWelcomeLog.Items.Add(item);
-        LstWelcomeLog.ScrollIntoView(LstWelcomeLog.Items[^1]);
-        LstLog.Items.Add(item);
-        LstLog.ScrollIntoView(LstLog.Items[^1]);
+        try { LstWelcomeLog.Items.Add(item); LstWelcomeLog.ScrollIntoView(LstWelcomeLog.Items[^1]); } catch { }
+        try { LstLog.Items.Add(item); LstLog.ScrollIntoView(LstLog.Items[^1]); } catch { }
     });
 }
 
