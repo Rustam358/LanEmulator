@@ -48,7 +48,7 @@ public class Engine
     public Process? ServerProcess { get; private set; }
     public Process? GameProcess { get; private set; }
 
-    public const string Version = "1.1.0";
+    public const string Version = "1.2.0";
     public const string AdapterName = "LanEmulatorTun";
     public const string AdapterMask = "255.255.255.0";
     public const int PrefixLength = 24;
