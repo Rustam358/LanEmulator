@@ -1,0 +1,305 @@
+================================================================================
+    ПОЛНЫЙ ОТЧЁТ: Wintun LAN Emulator — Step 1 & Step 2
+    Исполнитель: Линда (AutoClaw agent)
+    Дата: 2026-06-17
+================================================================================
+
+================================================================================
+ЧАСТЬ 0: ВХОДНОЙ ПРОМПТ ОТ GLM 5.2 (через Рустама)
+================================================================================
+
+Роль: Senior C# Developer, сетевое программирование низкого уровня для Windows.
+
+Задача: Консольный PoC на C# (.NET 8), использующий Wintun (WireGuard для Windows)
+для создания виртуального сетевого адаптера.
+
+Требования Step 1:
+- Создать адаптер "LanEmulatorTun" через P/Invoke к wintun.dll
+- IP 10.13.37.1/24
+- Поднять адаптер
+- Корректно освободить ресурсы
+- Только нативный P/Invoke, без NuGet-пакетов для VPN
+- x64, права Администратора
+
+================================================================================
+ЧАСТЬ 1: STEP 1 — СОЗДАНИЕ АДАПТЕРА
+================================================================================
+
+1.1. Изучение Wintun API
+
+Проанализировал заголовочные файлы WireGuard Wintun. Определил сигнатуры:
+
+  WintunCreateAdapter(Name, TunnelType, RequestedGUID) → IntPtr (handle)
+  WintunOpenAdapter(Name) → IntPtr
+  WintunCloseAdapter(Adapter) → void
+  WintunDeleteAdapter(…) → bool  ← КАК ВЫЯСНИЛОСЬ ПОЗЖЕ, НЕ СУЩЕСТВУЕТ
+  WintunGetAdapterLUID(Adapter, out ulong) → bool
+  WintunGetRunningDriverVersion() → uint
+
+Все функции: __stdcall (CallingConvention.StdCall в C#).
+NET_LUID: 64-битное значение → ulong.
+WINTUN_ADAPTER_HANDLE: void* → IntPtr.
+
+Для конфигурации сети использовал netsh (встроенная утилита Windows) —
+назначение IP, поднятие интерфейса. В продакшене заменить на iphlpapi.
+
+1.2. Архитектура Program.cs
+
+Поток выполнения:
+  1. Проверка прав администратора (WindowsPrincipal + app.manifest)
+  2. Проверка наличия wintun.dll
+  3. WintunGetRunningDriverVersion — драйвер загружен?
+  4. Очистка зависшего адаптера от предыдущего запуска
+  5. WintunCreateAdapter("LanEmulatorTun", "LanEmulator", null)
+  6. WintunGetAdapterLUID → получение LUID
+  7. ConvertInterfaceLuidToAlias (iphlpapi) → читаемое имя интерфейса
+  8. netsh: статический IP 10.13.37.1/24
+  9. netsh: admin=enabled
+  10. Ожидание Ctrl+C
+  11. WintunCloseAdapter → освобождение + удаление адаптера
+
+Структура: top-level statements + static helpers + static extern P/Invoke.
+.NET 8, win-x64, ImplicitUsings=disable, app.manifest (requireAdministrator).
+
+1.3. Сага с wintun.dll
+
+Проблема: wintun.net недоступен с этой машины.
+  Попытка 1: curl → скачалось 2% (15,901 байт), заморозка.
+  Попытка 2: Python urllib → TimeoutError через 120 секунд.
+  Попытка 3: Python urllib (timeout=180) → TimeoutError.
+  Причина: TCP-соединение устанавливается, но передача данных обрывается
+  после ~16KB. Возможно throttling или файрвол/прокси.
+
+Поиск альтернатив:
+  А) WireGuard MSI (wireguard-amd64-1.1.msi, 3.2 MB):
+     - Скачался быстро через download.wireguard.com
+     - msiexec /a → извлёк только wg.exe и wireguard.exe
+     - 7-Zip → то же самое (wintun.dll в Binary-таблицах MSI, не в CAB)
+     - PowerShell COM (WindowsInstaller.Installer) → не сработал из-за
+       Cyrillic-путей и COM-ошибок
+  Б) Установка WireGuard:
+     - msiexec /i → WireGuard 1.1 установлен
+     - Поиск wintun.dll в Program Files\WireGuard → НЕТ
+     - WireGuard 1.x не кладёт DLL как отдельный файл
+  В) Поиск по системе:
+     - НАЙДЕН: C:\Program Files\Cloudflare\Cloudflare WARP\wintun.dll
+     - 427,552 байт
+     - Cloudflare WARP использует Wintun как транспорт для WireGuard
+
+1.4. Верификация экспортов Cloudflare DLL
+
+  ДОСТУПНЫ:                            ОТСУТСТВУЕТ:
+  ✓ WintunCreateAdapter                ✗ WintunDeleteAdapter
+  ✓ WintunOpenAdapter
+  ✓ WintunCloseAdapter                 ВЫВОД: нужно адаптировать код.
+  ✓ WintunGetAdapterLUID               Добавил RemoveDeviceByAlias()
+  ✓ WintunGetRunningDriverVersion      через pnputil /remove-device +
+  ✓ WintunStartSession                 netsh admin=disabled.
+  ✓ WintunEndSession
+  ✓ WintunReceivePacket
+  ✓ WintunReleaseReceivePacket
+  ✓ WintunAllocateSendPacket
+  ✓ WintunSendPacket
+  ✓ WintunGetReadWaitEvent
+
+1.5. Проблемы сборки
+
+  - No .NET SDK found (только runtime 6.0).
+    Решение: winget install Microsoft.DotNet.SDK.8 (8.0.422, 210 MB).
+  - CS0103: Path, File, Thread не в контексте.
+    Решение: добавил using System.IO; using System.Threading;
+    (ImplicitUsings=disable в .csproj).
+  - Сборка успешна: 0 ошибок, 0 предупреждений.
+
+================================================================================
+ЧАСТЬ 2: ОФИЦИАЛЬНАЯ DLL И ПЕРЕОСМЫСЛЕНИЕ
+================================================================================
+
+2.1. Клонирование исходников
+
+  git clone с git.zx2c4.com → НЕ РАБОТАЕТ (та же проблема что с wintun.net).
+  git clone с github.com/WireGuard/wintun.git → УСПЕШНО (77 файлов).
+
+  Вывод: git.zx2c4.com и wintun.net имеют проблемы с TCP-передачей данных
+  с этой машины. GitHub работает нормально. Вероятная причина:
+  throttling/filtering на уровне ISP для не-Cloudflare/CDN хостов.
+
+2.2. Официальная DLL от пользователя
+
+  Пользователь скачал wintun-0.14.1.zip (732.9 KB) и передал через чат.
+  Извлечено: amd64/wintun.dll — 427,552 байт.
+
+2.3. КЛЮЧЕВОЕ ОТКРЫТИЕ
+
+  Сравнение побайтово:
+    Официальная wintun.dll (0.14.1): 427,552 байт
+    Cloudflare WARP wintun.dll:      427,552 байт
+    Результат: ИДЕНТИЧНЫ (sha256 совпадает).
+
+  Cloudflare НЕ модифицировал DLL — они используют оригинальную сборку.
+
+2.4. WintunDeleteAdapter НЕ СУЩЕСТВУЕТ
+
+  Изучение официального wintun.h показало:
+  НЕТ функции WintunDeleteAdapter в API!
+
+  Комментарий к WintunCloseAdapter:
+  "Releases Wintun adapter resources and, if adapter was created with
+   WintunCreateAdapter, removes adapter."
+
+  То есть CloseAdapter САМ удаляет адаптер. Мой предыдущий код с pnputil —
+  это был бой с тенью. Функция, которую я искал, никогда не существовала.
+
+  Полный список API из wintun.h:
+    WintunCreateAdapter        WintunOpenAdapter
+    WintunCloseAdapter         WintunDeleteDriver
+    WintunGetAdapterLUID       WintunGetRunningDriverVersion
+    WintunSetLogger            WintunStartSession
+    WintunEndSession           WintunGetReadWaitEvent
+    WintunReceivePacket        WintunReleaseReceivePacket
+    WintunAllocateSendPacket   WintunSendPacket
+
+================================================================================
+ЧАСТЬ 3: STEP 2 — RING BUFFER + UDP ТРАНСПОРТ
+================================================================================
+
+3.1. Архитектура
+
+  ┌──────────────┐     UDP:51820      ┌──────────────────┐
+  │  Peer / Test  │ ←────────────────→ │  Wintun PoC      │
+  │  127.0.0.1    │                    │                  │
+  │  :51821       │  сырые IP-пакеты   │  :51820          │
+  └──────────────┘                    └────────┬─────────┘
+                                               │
+                                      ┌────────▼─────────┐
+                                      │   Ring Buffer     │
+                                      │   (4 MiB)         │
+                                      │   Wintun API      │
+                                      └────────┬─────────┘
+                                               │
+                                      ┌────────▼─────────┐
+                                      │  LanEmulatorTun   │
+                                      │  10.13.37.1/24    │
+                                      │  (вирт. адаптер)  │
+                                      └──────────────────┘
+
+3.2. Два потока-насоса
+
+  Thread "Net→Tun" (UDP → Wintun):
+    UdpClient.ReceiveAsync() → ожидание датаграммы
+    WintunAllocateSendPacket(packetSize) → буфер в кольце
+    Marshal.Copy → копирование данных в буфер
+    WintunSendPacket → инжекция в виртуальный адаптер
+    Обработка ошибок: ERROR_BUFFER_OVERFLOW (drop), ERROR_HANDLE_EOF (stop)
+
+  Thread "Tun→Net" (Wintun → UDP):
+    WintunGetReadWaitEvent → event handle для эффективного ожидания
+    WintunReceivePacket → чтение пакета из адаптера
+    UdpClient.Send → отправка пиру
+    WintunReleaseReceivePacket → освобождение буфера
+    WaitForMultipleObjects → ожидание новых данных или shutdown
+
+3.3. P/Invoke (новые в Step 2)
+
+  WintunStartSession(adapter, capacity) → session handle
+  WintunEndSession(session)
+  WintunGetReadWaitEvent(session) → event handle
+  WintunReceivePacket(session, &packetSize) → byte*
+  WintunReleaseReceivePacket(session, packet)
+  WintunAllocateSendPacket(session, packetSize) → byte*
+  WintunSendPacket(session, packet)
+  WaitForMultipleObjects (kernel32) — для ожидания read-event
+
+  Параметры: Ring Capacity = 0x400000 (4 MiB),
+             WINTUN_MIN_RING_CAPACITY = 0x20000 (128 KiB),
+             WINTUN_MAX_RING_CAPACITY = 0x4000000 (64 MiB)
+
+3.4. Проблемы при разработке
+
+  - Console.ReadLine() конфликтовал с вводом в терминале: Enter от ping
+    триггерил shutdown. Заменено на Ctrl+C (CancelKeyPress + ManualResetEvent).
+  - WaitForMultipleObjects: параметр назван dwMilliseconds, а не milliseconds.
+    Исправлено на позиционные аргументы.
+
+================================================================================
+ЧАСТЬ 4: ТЕСТИРОВАНИЕ
+================================================================================
+
+4.1. Тест 1: Ping (базовый)
+
+  Команда: ping -n 3 10.13.37.1
+  Результат: 3/3 пакетов, <1ms, 0% потерь.
+  Вывод: адаптер создан, IP назначен, Windows видит интерфейс.
+
+4.2. Тест 2: ICMP Echo через Ring Buffer (полный цикл)
+
+  test-peer.py отправляет ICMP Echo Request через UDP:51820.
+  PoC получает датаграмму → AllocateSendPacket → SendPacket.
+  Windows получает ICMP Echo на LanEmulatorTun (10.13.37.1).
+  Windows генерирует ICMP Echo Reply.
+  PoC читает ответ через ReceivePacket → отправляет UDP на :51821.
+  test-peer.py получает ICMP type=0 (Echo Reply).
+
+  Результат: ROUNDTRIP SUCCESS! Пакет прошёл полный путь:
+    UDP → Ring Buffer → Windows IP stack → Ring Buffer → UDP.
+
+4.3. Тест 3: Dummy IP packet (неудачный, ожидаемо)
+
+  Первая версия test-peer.py слала IP-пакет с protocol=253 (experimental).
+  Результат: timeout. Windows получил пакет, но не знает что с ним делать,
+  не генерирует ответ. Tun→Net pump нечего слать обратно.
+  Вывод: для теста нужен протокол, на который Windows ОТВЕЧАЕТ (ICMP).
+
+================================================================================
+ЧАСТЬ 5: КЛЮЧЕВЫЕ ВЫВОДЫ И ЗАМЕТКИ ДЛЯ БУДУЩЕГО
+================================================================================
+
+5.1. Сетевые ограничения машины
+
+  - wintun.net: TCP-соединение ок, передача данных обрывается после ~16KB.
+  - git.zx2c4.com: та же проблема.
+  - GitHub / download.wireguard.com: работают нормально.
+  - Вероятная причина: ISP-level throttling для не-CDN хостов.
+
+5.2. Wintun API insights
+
+  - WintunDeleteAdapter НЕ СУЩЕСТВУЕТ. CloseAdapter удаляет адаптер.
+  - Cloudflare WARP DLL идентична официальной (побайтово).
+  - Wintun — это L3 TUN: SendPacket = инжекция пакета В Windows,
+    ReceivePacket = чтение пакета ИЗ Windows (то что система хочет отправить).
+
+5.3. Для production (заметки GLM 5.2)
+
+  - netsh → заменить на iphlpapi (AddIPAddress, DeleteIPAddress).
+  - Ctrl+C shutdown → заменить на нормальный lifecycle (service/UI).
+  - UDP транспорт → заменить на WireGuard-шифрование.
+  - hardcoded peer → заменить на Room Server (сигнализация).
+
+5.4. Инструментарий
+
+  - .NET SDK не был установлен. Установлен 8.0.422 через winget.
+  - Git работает (2.54.0), но git clone с некоторых хостов фейлится.
+  - GitHub CLI (gh) установлен 2.94.0, авторизован как Rustam358.
+
+================================================================================
+ЧАСТЬ 6: ФАЙЛЫ ПРОЕКТА
+================================================================================
+
+  wintun-poc/
+  ├── Program.cs           — основной код (~290 строк)
+  │   ├── Admin check + DLL check
+  │   ├── CreateAdapter + GetLUID + netsh config
+  │   ├── WintunStartSession (4 MiB ring)
+  │   ├── PumpNetworkToTun (UDP → Wintun)
+  │   ├── PumpTunToNet (Wintun → UDP)
+  │   ├── Ctrl+C shutdown handler
+  │   └── P/Invoke: 8 Wintun + iphlpapi + kernel32
+  ├── test-peer.py         — ICMP Echo тест для локальной проверки
+  ├── wintun-poc.csproj    — net8.0-windows, win-x64
+  ├── app.manifest         — requireAdministrator
+  ├── wintun.dll           — официальная 0.14.1 (427,552 bytes)
+  └── .gitignore
+
+  GitHub: https://github.com/Rustam358/LanEmulator (branch: master)
+
+================================================================================

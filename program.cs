@@ -1,26 +1,27 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
+using System.Net.Http;
+using System.Net.Http.Json;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Threading;
+using System.Threading.Tasks;
 
 // ═══════════════════════════════════════════════════════════════
-// Wintun Virtual LAN Emulator — Step 2: Ring Buffer + UDP
+// Wintun Virtual LAN Emulator — Step 5: Goldberg Auto-Patcher
 // .NET 8 | x64 only | Requires Administrator
 // ═══════════════════════════════════════════════════════════════
 
-const string AdapterName  = "LanEmulatorTun";
-const string AdapterIP    = "10.13.37.1";
-const string AdapterMask  = "255.255.255.0";
-const int    PrefixLength = 24;
-const int    UdpPort      = 51820;
-// Hardcoded peer for local loopback test (127.0.0.1:51821)
-const string PeerIP       = "127.0.0.1";
-const int    PeerPort     = 51821;
+const string SignalServerUrl  = "http://127.0.0.1:8000";
+const string AdapterName      = "LanEmulatorTun";
+const string AdapterMask      = "255.255.255.0";
+const int    PrefixLength     = 24;
+const int    UdpPort          = 51820;
 
 // ── 1. Admin check ────────────────────────────────────────────
 if (!IsAdministrator())
@@ -37,26 +38,217 @@ if (!File.Exists(wintunPath))
     return 2;
 }
 
-Console.WriteLine("=== Wintun LAN Emulator — Step 2 (Ring Buffer + UDP) ===");
+Console.WriteLine("=== Wintun LAN Emulator — Step 5 (Goldberg Auto-Patcher) ===");
 Console.WriteLine($"    Adapter : {AdapterName}");
-Console.WriteLine($"    IP      : {AdapterIP}/{PrefixLength}");
-Console.WriteLine($"    UDP     : 0.0.0.0:{UdpPort} -> {PeerIP}:{PeerPort}");
+Console.WriteLine($"    IP      : assigned by server");
+Console.WriteLine($"    UDP     : 0.0.0.0:{UdpPort}");
+Console.WriteLine($"    Server  : {SignalServerUrl}");
 Console.WriteLine();
 
-// ── 3. Driver version ─────────────────────────────────────────
+// ── 3. Prompt for Room ID ─────────────────────────────────────
+Console.Write("Room ID: ");
+string? roomId = Console.ReadLine()?.Trim();
+if (string.IsNullOrWhiteSpace(roomId))
+{
+    Console.Error.WriteLine("[FATAL] Room ID is required.");
+    return 6;
+}
+Console.WriteLine($"[OK]   Room: '{roomId}'");
+
+// ── 4. Prompt for Game Executable ─────────────────────────────
+Console.Write("Path to game .exe: ");
+string? gameExePath = Console.ReadLine()?.Trim();
+
+string? gameDir = null;
+if (!string.IsNullOrWhiteSpace(gameExePath))
+{
+    gameExePath = Path.GetFullPath(gameExePath);
+    if (!File.Exists(gameExePath))
+    {
+        Console.Error.WriteLine($"[FATAL] Game executable not found: {gameExePath}");
+        return 8;
+    }
+    gameDir = Path.GetDirectoryName(gameExePath)!;
+    Console.WriteLine($"[OK]   Game: {gameExePath}");
+}
+
+// ── 5. Register with signaling server ─────────────────────────
+using var http = new HttpClient { BaseAddress = new Uri(SignalServerUrl) };
+http.Timeout = TimeSpan.FromSeconds(10);
+
+RegisterResponse? reg;
+try
+{
+    var regReq = new { player_id = Environment.MachineName, room_id = roomId, udp_port = UdpPort };
+    var regResp = await http.PostAsJsonAsync("/register", regReq);
+    regResp.EnsureSuccessStatusCode();
+    reg = await regResp.Content.ReadFromJsonAsync<RegisterResponse>();
+    Console.WriteLine($"[OK]   Registered as '{regReq.player_id}' (players in room: {reg?.player_count})");
+}
+catch (Exception ex)
+{
+    Console.Error.WriteLine($"[FATAL] Registration failed: {ex.Message}");
+    return 7;
+}
+
+string myVirtualIP = reg?.virtual_ip ?? "10.13.37.1";
+Console.WriteLine($"[OK]   Assigned virtual IP: {myVirtualIP}");
+
+// ── 6. Poll until peer joins ──────────────────────────────────
+string peerIP = "127.0.0.1";
+int peerPort = UdpPort;
+string peerVirtualIP = "10.13.37.2";
+
+Console.WriteLine();
+Console.Write("[*]   Waiting for peer");
+bool peerFound = false;
+
+while (!peerFound)
+{
+    try
+    {
+        var poll = await http.GetFromJsonAsync<PollResponse>($"/poll?room_id={Uri.EscapeDataString(roomId)}");
+
+        if (poll is { status: "ready", players: not null })
+        {
+            var peer = poll.players.Find(p =>
+                !string.Equals(p.player_id, Environment.MachineName, StringComparison.OrdinalIgnoreCase));
+
+            if (peer != null)
+            {
+                peerIP = peer.ip;
+                peerPort = peer.udp_port;
+                peerVirtualIP = peer.virtual_ip;
+                peerFound = true;
+                Console.WriteLine();
+                Console.WriteLine($"[OK]   Peer found: {peer.player_id}");
+                Console.WriteLine($"       Public IP : {peerIP}:{peerPort}");
+                Console.WriteLine($"       VPN IP    : {peerVirtualIP}");
+            }
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.Write($"!({ex.Message.GetHashCode():X4})");
+    }
+
+    if (!peerFound)
+    {
+        Console.Write(".");
+        await Task.Delay(2000, CancellationToken.None);
+    }
+}
+
+// ── 7. Goldberg Auto-Patcher ──────────────────────────────────
+if (gameDir != null)
+{
+    Console.WriteLine();
+    Console.WriteLine("─── Goldberg Auto-Patcher ────────────────────────────");
+
+    string goldbergSrc = Path.Combine(AppContext.BaseDirectory, "goldberg", "steam_api64.dll");
+    string targetDll = Path.Combine(gameDir, "steam_api64.dll");
+
+    // 7a. Backup original DLL
+    string backupPath = targetDll + ".bak";
+    if (File.Exists(targetDll) && !File.Exists(backupPath))
+    {
+        File.Move(targetDll, backupPath);
+        Console.WriteLine($"[OK]   Backed up original DLL → steam_api64.dll.bak");
+    }
+    else if (File.Exists(backupPath))
+    {
+        Console.WriteLine("[INFO] Backup already exists, replacing target…");
+    }
+
+    // 7b. Copy goldberg DLL
+    if (File.Exists(goldbergSrc))
+    {
+        File.Copy(goldbergSrc, targetDll, overwrite: true);
+        Console.WriteLine("[OK]   Goldberg steam_api64.dll deployed");
+    }
+    else
+    {
+        Console.Error.WriteLine($"[WARN] Goldberg DLL not found at: {goldbergSrc}");
+        Console.Error.WriteLine("       Place steam_api64.dll in ./goldberg/ next to wintun-poc.exe");
+    }
+
+    // 7c. Write INI config
+    string iniPath = Path.Combine(gameDir, "GoldbergSteamEmu.ini");
+    string iniContent = $"[Networking]\nip={peerVirtualIP}\n";
+    File.WriteAllText(iniPath, iniContent);
+    Console.WriteLine($"[OK]   Goldberg INI written → peer IP: {peerVirtualIP}");
+
+    // 7d. Copy steam_settings folder (appid, etc.)
+    string settingsSrc = Path.Combine(AppContext.BaseDirectory, "goldberg", "steam_settings");
+    string settingsDst = Path.Combine(gameDir, "steam_settings");
+
+    if (Directory.Exists(settingsSrc))
+    {
+        // Copy entire steam_settings folder to game directory
+        Directory.CreateDirectory(settingsDst);
+        foreach (string file in Directory.GetFiles(settingsSrc, "*", SearchOption.AllDirectories))
+        {
+            string relative = file[(settingsSrc.Length + 1)..];
+            string dstFile = Path.Combine(settingsDst, relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(dstFile)!);
+            File.Copy(file, dstFile, overwrite: true);
+        }
+        Console.WriteLine("[OK]   steam_settings/ deployed to game folder");
+    }
+    else
+    {
+        // Ensure at least steam_appid.txt exists (template)
+        string appIdPath = Path.Combine(settingsDst, "steam_appid.txt");
+        if (!File.Exists(appIdPath))
+        {
+            Directory.CreateDirectory(settingsDst);
+            File.WriteAllText(appIdPath, "0 # <-- Replace with game's Steam AppID");
+        }
+        Console.WriteLine("[INFO] Created steam_settings/steam_appid.txt (edit AppID!)");
+    }
+    Console.WriteLine("──────────────────────────────────────────────────────");
+}
+
+// ── 8. UDP Hole Punching ──────────────────────────────────────
+Console.WriteLine();
+Console.Write("[*]   Hole punching");
+using var holePunchSock = new UdpClient();
+holePunchSock.Client.SendBufferSize = 64 * 1024;
+
+var peerEndPoint = new IPEndPoint(IPAddress.Parse(peerIP), peerPort);
+byte[] holePunchData = new byte[] { 0x00 };
+int punchCount = 0;
+
+for (int i = 0; i < 10; i++)
+{
+    try
+    {
+        holePunchSock.Send(holePunchData, holePunchData.Length, peerEndPoint);
+        punchCount++;
+        Console.Write(".");
+    }
+    catch (Exception ex)
+    {
+        Console.Write($"!({ex.Message.GetHashCode():X4})");
+    }
+    await Task.Delay(500, CancellationToken.None);
+}
+Console.WriteLine($" {punchCount}/10 packets sent");
+
+// ── 9. Driver version ─────────────────────────────────────────
 uint ver = WintunGetRunningDriverVersion();
 Console.WriteLine($"[OK]   Wintun driver v{ver >> 16}.{ver & 0xFFFF}");
 
-// ── 4. Clean stale adapter ────────────────────────────────────
+// ── 10. Clean stale adapter ───────────────────────────────────
 IntPtr existing = WintunOpenAdapter(AdapterName);
 if (existing != IntPtr.Zero)
 {
-    Console.WriteLine("[INFO] Stale adapter found, closing (auto-removes)…");
+    Console.WriteLine("[INFO] Stale adapter found, closing…");
     WintunCloseAdapter(existing);
     Thread.Sleep(500);
 }
 
-// ── 5. Create virtual adapter ─────────────────────────────────
+// ── 11. Create virtual adapter ────────────────────────────────
 IntPtr adapter = WintunCreateAdapter(AdapterName, "LanEmulator", IntPtr.Zero);
 if (adapter == IntPtr.Zero)
 {
@@ -66,7 +258,7 @@ if (adapter == IntPtr.Zero)
 }
 Console.WriteLine($"[OK]   Adapter '{AdapterName}' created.");
 
-// ── 6. Get LUID → interface alias ─────────────────────────────
+// ── 12. Get LUID → interface alias ────────────────────────────
 if (!WintunGetAdapterLUID(adapter, out ulong luid))
 {
     Console.Error.WriteLine($"[FATAL] WintunGetAdapterLUID failed ({Marshal.GetLastWin32Error()})");
@@ -78,13 +270,17 @@ Console.WriteLine($"[OK]   LUID: 0x{luid:X16}");
 string ifAlias = GetInterfaceAlias(luid);
 Console.WriteLine($"[OK]   Interface alias: \"{ifAlias}\"");
 
-// ── 7. Assign IP & bring up ───────────────────────────────────
-RunNetsh($"interface ip set address name=\"{ifAlias}\" source=static addr={AdapterIP} mask={AdapterMask}");
+// ── 13. Assign IP & bring up ──────────────────────────────────
+RunNetsh($"interface ip set address name=\"{ifAlias}\" source=static addr={myVirtualIP} mask={AdapterMask}");
 RunNetsh($"interface set interface name=\"{ifAlias}\" admin=enabled");
-Console.WriteLine($"[OK]   IP {AdapterIP}/{PrefixLength} assigned, interface UP");
+Console.WriteLine($"[OK]   IP {myVirtualIP}/{PrefixLength} assigned, interface UP");
 
-// ── 8. Start Wintun session (Ring Buffer) ────────────────────
-const uint RingCapacity = 0x400000; // 4 MiB
+// ── 14. Add route for peer ────────────────────────────────────
+RunRoute($"add {peerVirtualIP} mask 255.255.255.255 {myVirtualIP} metric 1");
+Console.WriteLine($"[OK]   Route added: {peerVirtualIP}/32 → via {myVirtualIP}");
+
+// ── 15. Start Wintun session (Ring Buffer) ────────────────────
+const uint RingCapacity = 0x400000;
 IntPtr session = WintunStartSession(adapter, RingCapacity);
 if (session == IntPtr.Zero)
 {
@@ -95,21 +291,18 @@ if (session == IntPtr.Zero)
 }
 Console.WriteLine($"[OK]   Wintun session started (ring: {RingCapacity / 1024 / 1024} MiB)");
 
-// ── 9. Launch UDP listener + packet pump ──────────────────────
+// ── 16. Launch UDP listener + packet pump ─────────────────────
 using var cts = new CancellationTokenSource();
 using var udp = new UdpClient(UdpPort);
 udp.Client.ReceiveBufferSize = 4 * 1024 * 1024;
 udp.Client.SendBufferSize    = 4 * 1024 * 1024;
 Console.WriteLine($"[OK]   UDP listening on 0.0.0.0:{UdpPort}");
 
-// Thread A: UDP → Wintun (packets from network into virtual adapter)
 var pumpNetToTun = new Thread(() => PumpNetworkToTun(udp, session, cts.Token))
 {
     Name = "Net→Tun", IsBackground = true
 };
-
-// Thread B: Wintun → UDP (packets from virtual adapter out to network)
-var pumpTunToNet = new Thread(() => PumpTunToNet(session, PeerIP, PeerPort, cts.Token))
+var pumpTunToNet = new Thread(() => PumpTunToNet(session, peerIP, peerPort, cts.Token))
 {
     Name = "Tun→Net", IsBackground = true
 };
@@ -118,59 +311,94 @@ pumpNetToTun.Start();
 pumpTunToNet.Start();
 Console.WriteLine("[OK]   Packet pump threads running");
 
-// ── 10. Wait ──────────────────────────────────────────────────
+// ── 17. Launch the game ───────────────────────────────────────
+Process? gameProcess = null;
+if (gameExePath != null)
+{
+    try
+    {
+        gameProcess = Process.Start(new ProcessStartInfo(gameExePath)
+        {
+            WorkingDirectory = gameDir,
+            UseShellExecute = false
+        });
+        Console.WriteLine($"[OK]   Game launched (PID: {gameProcess?.Id})");
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"[WARN] Failed to launch game: {ex.Message}");
+    }
+}
+
+// ── 18. Wait ──────────────────────────────────────────────────
 var shutdownEvent = new ManualResetEventSlim(false);
 Console.CancelKeyPress += (_, e) =>
 {
-    e.Cancel = true; // Don't kill process immediately
+    e.Cancel = true;
     shutdownEvent.Set();
 };
 
 Console.WriteLine();
 Console.WriteLine("╔═══════════════════════════════════════════════════════╗");
-Console.WriteLine("║  Adapter is LIVE — Ring Buffer + UDP ACTIVE.         ║");
+Console.WriteLine("║  VPN + Goldberg ACTIVE — Game should be running.     ║");
 Console.WriteLine("║                                                       ║");
-Console.WriteLine($"║  Tun IP    : {AdapterIP}/{PrefixLength,-30}║");
+Console.WriteLine($"║  My  IP    : {myVirtualIP}/{PrefixLength,-30}║");
+Console.WriteLine($"║  Peer IP   : {peerVirtualIP}/32                            ║");
 Console.WriteLine($"║  UDP recv  : 0.0.0.0:{UdpPort,-31}║");
-Console.WriteLine($"║  UDP send  : {PeerIP}:{PeerPort,-31}║");
-Console.WriteLine("║                                                       ║");
-Console.WriteLine("║  Test from a SECOND terminal:                         ║");
-Console.WriteLine($"║    ping {AdapterIP}                                   ║");
-Console.WriteLine("║    python test-peer.py                                ║");
+Console.WriteLine($"║  UDP send  : {peerIP}:{peerPort,-31}║");
+Console.WriteLine($"║  Room      : {roomId,-38}║");
+if (gameProcess != null)
+    Console.WriteLine($"║  Game PID  : {gameProcess.Id,-38}║");
 Console.WriteLine("║                                                       ║");
 Console.WriteLine("║  Press Ctrl+C to shutdown…                           ║");
 Console.WriteLine("╚═══════════════════════════════════════════════════════╝");
 
-// Wait until Ctrl+C is pressed
 shutdownEvent.Wait();
 
-// ── 11. Cleanup ───────────────────────────────────────────────
+// ── 19. Cleanup ───────────────────────────────────────────────
 Console.WriteLine();
 Console.WriteLine("[*] Shutting down…");
-cts.Cancel();
 
-// Join threads with timeout
+// Kill game process first
+if (gameProcess is { HasExited: false })
+{
+    Console.WriteLine($"[*]   Terminating game (PID {gameProcess.Id})…");
+    try
+    {
+        gameProcess.Kill(entireProcessTree: true);
+        gameProcess.WaitForExit(5000);
+        Console.WriteLine("[OK]   Game process terminated.");
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"[WARN] Failed to kill game: {ex.Message}");
+    }
+}
+
+cts.Cancel();
 pumpNetToTun.Join(3000);
 pumpTunToNet.Join(3000);
 
-// End session
 WintunEndSession(session);
 Console.WriteLine("[OK]   Wintun session ended.");
 
-// Close adapter (also removes it from system — per Wintun docs)
 WintunCloseAdapter(adapter);
 Console.WriteLine("[OK]   Adapter closed and removed from system.");
 
 udp.Close();
+Console.WriteLine("[OK]   UDP socket closed.");
+
+RunRoute($"delete {peerVirtualIP}");
+Console.WriteLine("[OK]   Route removed.");
+
 Console.WriteLine("[DONE] Cleanup complete.");
 return 0;
 
 
 // ═══════════════════════════════════════════════════════════════
-// Packet pump logic
+// Packet pumps
 // ═══════════════════════════════════════════════════════════════
 
-/// <summary>Reads UDP datagrams from the network and injects them into Wintun adapter.</summary>
 static void PumpNetworkToTun(UdpClient udp, IntPtr session, CancellationToken ct)
 {
     try
@@ -178,7 +406,6 @@ static void PumpNetworkToTun(UdpClient udp, IntPtr session, CancellationToken ct
         var peer = new IPEndPoint(IPAddress.Any, 0);
         while (!ct.IsCancellationRequested)
         {
-            // Blocking receive with cancellation support
             var task = udp.ReceiveAsync(ct);
             task.AsTask().Wait(ct);
             var result = task.Result;
@@ -186,23 +413,17 @@ static void PumpNetworkToTun(UdpClient udp, IntPtr session, CancellationToken ct
 
             if (packet.Length == 0) continue;
 
-            // Allocate send buffer in Wintun ring
             IntPtr sendBuf = WintunAllocateSendPacket(session, (uint)packet.Length);
             if (sendBuf == IntPtr.Zero)
             {
                 int err = Marshal.GetLastWin32Error();
-                if (err == 111 /*ERROR_BUFFER_OVERFLOW*/)
-                    continue; // Ring full, drop packet
-                if (err == 38 /*ERROR_HANDLE_EOF*/)
-                    break; // Adapter closing
+                if (err == 111) continue;
+                if (err == 38) break;
                 Console.Error.WriteLine($"   [WARN] AllocateSendPacket failed: {err}");
                 continue;
             }
 
-            // Copy UDP payload into Wintun buffer
             Marshal.Copy(packet, 0, sendBuf, packet.Length);
-
-            // Send into the virtual adapter (injects into Windows network stack)
             WintunSendPacket(session, sendBuf);
         }
     }
@@ -213,14 +434,12 @@ static void PumpNetworkToTun(UdpClient udp, IntPtr session, CancellationToken ct
     }
 }
 
-/// <summary>Reads packets from Wintun adapter and sends them via UDP to the peer.</summary>
 static void PumpTunToNet(IntPtr session, string peerIP, int peerPort, CancellationToken ct)
 {
     var peer = new IPEndPoint(IPAddress.Parse(peerIP), peerPort);
     using var sock = new UdpClient();
     sock.Client.SendBufferSize = 4 * 1024 * 1024;
 
-    // Get the read-wait event for efficient polling
     IntPtr readEvent = WintunGetReadWaitEvent(session);
     if (readEvent == IntPtr.Zero)
     {
@@ -235,36 +454,25 @@ static void PumpTunToNet(IntPtr session, string peerIP, int peerPort, Cancellati
     {
         while (!ct.IsCancellationRequested)
         {
-            // Try to receive immediately
             while (true)
             {
                 IntPtr packet = WintunReceivePacket(session, out uint packetSize);
                 if (packet == IntPtr.Zero)
                 {
                     int err = Marshal.GetLastWin32Error();
-                    if (err == 259 /*ERROR_NO_MORE_ITEMS*/)
-                        break; // No more packets, wait
-                    if (err == 38 /*ERROR_HANDLE_EOF*/)
-                        return; // Adapter closing
+                    if (err == 259) break;
+                    if (err == 38) return;
                     break;
                 }
 
-                // Copy packet data
                 byte[] buffer = new byte[packetSize];
                 Marshal.Copy(packet, buffer, 0, (int)packetSize);
-
-                // Send to peer via UDP
                 sock.Send(buffer, buffer.Length, peer);
-
-                // Release the packet back to Wintun
                 WintunReleaseReceivePacket(session, packet);
             }
 
-            // Wait for more data or cancellation
-            int signaled = (int)WaitForMultipleObjects(
-                1, new[] { readEvent }, false, 500u);
-            if (signaled == unchecked((int)0xFFFFFFFF)) // WAIT_FAILED
-                break;
+            int signaled = (int)WaitForMultipleObjects(1, new[] { readEvent }, false, 500u);
+            if (signaled == unchecked((int)0xFFFFFFFF)) break;
         }
     }
     catch (OperationCanceledException) { }
@@ -318,6 +526,30 @@ static void RunNetsh(string args)
         Console.Error.WriteLine($"   [WARN] netsh exit code: {proc.ExitCode}");
 }
 
+static void RunRoute(string args)
+{
+    Console.WriteLine($"   [route] route {args}");
+    using var proc = new Process
+    {
+        StartInfo = new ProcessStartInfo("route", args)
+        {
+            UseShellExecute        = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError  = true,
+            CreateNoWindow         = true
+        }
+    };
+    proc.Start();
+    proc.WaitForExit(5000);
+
+    string stdout = proc.StandardOutput.ReadToEnd().Trim();
+    string stderr = proc.StandardError.ReadToEnd().Trim();
+
+    if (stdout.Length > 0) Console.WriteLine($"       {stdout}");
+    if (stderr.Length > 0) Console.Error.WriteLine($"   [ERR] {stderr}");
+    if (proc.ExitCode != 0) Console.Error.WriteLine($"   [WARN] route exit code: {proc.ExitCode}");
+}
+
 static string GetInterfaceAlias(ulong luid)
 {
     char[] buffer = new char[512];
@@ -332,7 +564,7 @@ static string GetInterfaceAlias(ulong luid)
 
 
 // ═══════════════════════════════════════════════════════════════
-// P/Invoke — Wintun (wintun.dll)
+// P/Invoke — Wintun
 // ═══════════════════════════════════════════════════════════════
 
 [DllImport("wintun.dll", CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode)]
@@ -350,8 +582,6 @@ static extern bool WintunGetAdapterLUID(IntPtr Adapter, out ulong Luid);
 
 [DllImport("wintun.dll", CallingConvention = CallingConvention.StdCall)]
 static extern uint WintunGetRunningDriverVersion();
-
-// ── Session API (Ring Buffer) ─────────────────────────────────
 
 [DllImport("wintun.dll", CallingConvention = CallingConvention.StdCall)]
 static extern IntPtr WintunStartSession(IntPtr Adapter, uint Capacity);
@@ -374,12 +604,8 @@ static extern IntPtr WintunAllocateSendPacket(IntPtr Session, uint PacketSize);
 [DllImport("wintun.dll", CallingConvention = CallingConvention.StdCall)]
 static extern void WintunSendPacket(IntPtr Session, IntPtr Packet);
 
-// ── iphlpapi ──────────────────────────────────────────────────
-
 [DllImport("iphlpapi.dll", CharSet = CharSet.Unicode)]
 static extern uint ConvertInterfaceLuidToAlias(ref ulong InterfaceLuid, [Out] char[] InterfaceAlias, nuint Length);
-
-// ── kernel32 (for event wait) ─────────────────────────────────
 
 [DllImport("kernel32.dll", SetLastError = true)]
 static extern uint WaitForMultipleObjects(
@@ -387,3 +613,13 @@ static extern uint WaitForMultipleObjects(
     IntPtr[] lpHandles,
     [MarshalAs(UnmanagedType.Bool)] bool fWaitAll,
     uint dwMilliseconds);
+
+// ═══════════════════════════════════════════════════════════════
+// Server models
+// ═══════════════════════════════════════════════════════════════
+
+record RegisterResponse(string status, string room_id, string? virtual_ip, int player_count);
+
+record PollResponse(string status, int player_count, List<PlayerInfo>? players);
+
+record PlayerInfo(string player_id, string ip, int udp_port, string virtual_ip);
