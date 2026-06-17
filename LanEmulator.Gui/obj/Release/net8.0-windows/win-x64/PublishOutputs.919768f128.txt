@@ -1,0 +1,2 @@
+C:\Users\Рустам\.openclaw-autoclaw\agents\agent-glogkc\workspace\LanEmulator\publish\LanEmulator.Core.pdb
+C:\Users\Рустам\.openclaw-autoclaw\agents\agent-glogkc\workspace\LanEmulator\publish\LanEmulator.exe

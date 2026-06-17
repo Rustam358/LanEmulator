@@ -1,0 +1,13 @@
+{
+  "version": 2,
+  "dgSpecHash": "JZhgKE1yJug=",
+  "success": true,
+  "projectFilePath": "C:\\Users\\Рустам\\.openclaw-autoclaw\\agents\\agent-glogkc\\workspace\\LanEmulator\\LanEmulator.Gui\\LanEmulator.Gui.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\Рустам\\.nuget\\packages\\microsoft.net.illink.tasks\\8.0.28\\microsoft.net.illink.tasks.8.0.28.nupkg.sha512",
+    "C:\\Users\\Рустам\\.nuget\\packages\\microsoft.netcore.app.runtime.win-x64\\8.0.28\\microsoft.netcore.app.runtime.win-x64.8.0.28.nupkg.sha512",
+    "C:\\Users\\Рустам\\.nuget\\packages\\microsoft.windowsdesktop.app.runtime.win-x64\\8.0.28\\microsoft.windowsdesktop.app.runtime.win-x64.8.0.28.nupkg.sha512",
+    "C:\\Users\\Рустам\\.nuget\\packages\\microsoft.aspnetcore.app.runtime.win-x64\\8.0.28\\microsoft.aspnetcore.app.runtime.win-x64.8.0.28.nupkg.sha512"
+  ],
+  "logs": []
+}
