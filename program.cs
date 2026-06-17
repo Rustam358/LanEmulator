@@ -371,11 +371,6 @@ if (mode == 1 && gameExePath != null)
 
 // ── 18. Wait ──────────────────────────────────────────────────
 var shutdownEvent = new ManualResetEventSlim(false);
-Console.CancelKeyPress += (_, e) =>
-{
-    e.Cancel = true;
-    shutdownEvent.Set();
-};
 
 Console.WriteLine();
 Console.WriteLine("╔═══════════════════════════════════════════════════════╗");
@@ -393,10 +388,15 @@ Console.WriteLine($"║  Mode      : {(mode == 1 ? "Steam + Goldberg" : "Pure LA
 if (gameProcess != null)
     Console.WriteLine($"║  Game PID  : {gameProcess.Id,-38}║");
 Console.WriteLine("║                                                       ║");
-Console.WriteLine("║  Press Ctrl+C to shutdown…                           ║");
+Console.WriteLine("║  Press ESC to shutdown…                              ║");
 Console.WriteLine("╚═══════════════════════════════════════════════════════╝");
 
-shutdownEvent.Wait();
+// Wait for ESC key
+while (Console.ReadKey(true).Key != ConsoleKey.Escape)
+{
+    // ignore other keys
+}
+shutdownEvent.Set();
 
 // ── 19. Cleanup ───────────────────────────────────────────────
 Console.WriteLine();
