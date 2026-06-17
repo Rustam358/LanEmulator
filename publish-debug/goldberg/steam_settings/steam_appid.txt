@@ -1,3 +1,0 @@
-0 # Replace with your game's Steam AppID
-# Subnautica = 264710
-# Find AppID on: https://steamdb.info/

@@ -2,6 +2,7 @@
 bin/
 obj/
 publish/
+publish-debug/
 
 # IDE
 .vs/
