@@ -11,20 +11,36 @@ using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
 // ═══════════════════════════════════════════════════════════════
-// Wintun Virtual LAN Emulator — Step 7: Multi-peer (up to 20)
+// Wintun Virtual LAN Emulator v1.0.0
 // .NET 8 | x64 only | Requires Administrator
 // ═══════════════════════════════════════════════════════════════
 
-const string SignalServerUrl  = "http://127.0.0.1:8000";
-const string AdapterName      = "LanEmulatorTun";
-const string AdapterMask      = "255.255.255.0";
-const int    PrefixLength     = 24;
-const int    UdpPort          = 51820;
+const string Version = "1.0.0";
+const string AdapterName = "LanEmulatorTun";
+const string AdapterMask = "255.255.255.0";
+const int    PrefixLength = 24;
+const int    UdpPort = 51820;
+
+// Server URL: first CLI arg (unless it's --help/-h)
+if (args.Length > 0 && (args[0] == "--help" || args[0] == "-h" || args[0] == "/?"))
+{
+    Console.WriteLine($"LanEmulator v{Version} — Virtual LAN for gaming");
+    Console.WriteLine("Usage: LanEmulator.exe [server_url]");
+    Console.WriteLine("  server_url  Signaling server address (default: http://127.0.0.1:8000)");
+    Console.WriteLine("Examples:");
+    Console.WriteLine("  LanEmulator.exe");
+    Console.WriteLine("  LanEmulator.exe http://192.168.1.50:8000");
+    Console.WriteLine("  LanEmulator.exe https://my-signal-server.onrender.com");
+    return 0;
+}
+
+string signalServerUrl = args.Length > 0 && !string.IsNullOrWhiteSpace(args[0])
+    ? args[0].TrimEnd('/')
+    : "http://127.0.0.1:8000";
 
 // ── 1. Admin check ────────────────────────────────────────────
 if (!IsAdministrator())
@@ -41,11 +57,11 @@ if (!File.Exists(wintunPath))
     return 2;
 }
 
-Console.WriteLine("=== Wintun LAN Emulator — Step 7 (Multi-peer) ===");
+Console.WriteLine($"=== Wintun LAN Emulator v{Version} ===");
 Console.WriteLine($"    Adapter : {AdapterName}");
 Console.WriteLine($"    IP      : assigned by server");
 Console.WriteLine($"    UDP     : 0.0.0.0:{UdpPort}");
-Console.WriteLine($"    Server  : {SignalServerUrl}");
+Console.WriteLine($"    Server  : {signalServerUrl}");
 Console.WriteLine();
 
 // ── 3. Select mode ────────────────────────────────────────────
@@ -96,8 +112,8 @@ if (mode == 1)
     }
 }
 
-// ── 5b. Register with signaling server ────────────────────────
-using var http = new HttpClient { BaseAddress = new Uri(SignalServerUrl) };
+// ── 6. Register with signaling server ─────────────────────────
+using var http = new HttpClient { BaseAddress = new Uri(signalServerUrl) };
 http.Timeout = TimeSpan.FromSeconds(10);
 
 RegisterResponse? reg;
@@ -109,6 +125,12 @@ try
     reg = await regResp.Content.ReadFromJsonAsync<RegisterResponse>();
     Console.WriteLine($"[OK]   Registered as '{regReq.player_id}' (players in room: {reg?.player_count})");
 }
+catch (HttpRequestException ex)
+{
+    Console.Error.WriteLine($"[FATAL] Cannot reach signaling server: {signalServerUrl}");
+    Console.Error.WriteLine($"       {ex.Message}");
+    return 7;
+}
 catch (Exception ex)
 {
     Console.Error.WriteLine($"[FATAL] Registration failed: {ex.Message}");
@@ -118,37 +140,68 @@ catch (Exception ex)
 string myVirtualIP = reg?.virtual_ip ?? "10.13.37.1";
 Console.WriteLine($"[OK]   Assigned virtual IP: {myVirtualIP}");
 
-// ── 6. Poll until at least one peer joins ────────────────────
+// ── 7. Poll until at least one peer joins ────────────────────
 var peers = new List<PlayerInfo>();
+var peerLock = new object();
+var ipToPeer = new Dictionary<string, IPEndPoint>();
 
 Console.WriteLine();
 Console.Write("[*]   Waiting for peers");
+int pollRetries = 0;
+const int maxPollRetries = 60;  // 2 minutes total
 
 while (peers.Count == 0)
 {
     try
     {
-        var poll = await http.GetFromJsonAsync<PollResponse>($"/poll?room_id={Uri.EscapeDataString(roomId)}");
+        var poll = await http.GetFromJsonAsync<PollResponse>(
+            $"/poll?room_id={Uri.EscapeDataString(roomId)}");
 
         if (poll is { status: "ready", players: not null })
         {
-            peers = poll.players.FindAll(p =>
+            var found = poll.players.FindAll(p =>
                 !string.Equals(p.player_id, Environment.MachineName, StringComparison.OrdinalIgnoreCase));
 
-            if (peers.Count > 0)
+            if (found.Count > 0)
             {
                 Console.WriteLine();
-                Console.WriteLine($"[OK]   {peers.Count} peer(s) in room:");
-                for (int i = 0; i < peers.Count; i++)
+                Console.WriteLine($"[OK]   {found.Count} peer(s) in room:");
+                for (int i = 0; i < found.Count; i++)
                 {
-                    var p = peers[i];
+                    var p = found[i];
                     Console.WriteLine($"       [{i + 1}] {p.player_id,-20} VPN: {p.virtual_ip,-16} Public: {p.ip}:{p.udp_port}");
+                }
+
+                lock (peerLock)
+                {
+                    peers = found;
+                    ipToPeer.Clear();
+                    foreach (var p in peers)
+                        ipToPeer[p.virtual_ip] = new IPEndPoint(IPAddress.Parse(p.ip), p.udp_port);
                 }
             }
         }
+        pollRetries = 0;  // reset on success
+    }
+    catch (HttpRequestException)
+    {
+        pollRetries++;
+        if (pollRetries >= maxPollRetries)
+        {
+            Console.Error.WriteLine($"\n[FATAL] Signaling server unreachable after {maxPollRetries * 2}s.");
+            Console.Error.WriteLine($"        Check: is '{signalServerUrl}' running?");
+            return 7;
+        }
+        Console.Write("?");
     }
     catch (Exception ex)
     {
+        pollRetries++;
+        if (pollRetries >= maxPollRetries)
+        {
+            Console.Error.WriteLine($"\n[FATAL] Poll failed after {maxPollRetries * 2}s: {ex.Message}");
+            return 7;
+        }
         Console.Write($"!({ex.Message.GetHashCode():X4})");
     }
 
@@ -159,14 +212,7 @@ while (peers.Count == 0)
     }
 }
 
-// Build virtual IP → public endpoint map for packet routing
-var ipToPeer = new Dictionary<string, IPEndPoint>();
-foreach (var p in peers)
-{
-    ipToPeer[p.virtual_ip] = new IPEndPoint(IPAddress.Parse(p.ip), p.udp_port);
-}
-
-// ── 7. Goldberg Auto-Patcher (Steam mode only) ────────────────
+// ── 8. Goldberg Auto-Patcher (Steam mode only) ────────────────
 if (mode == 1 && gameDir != null)
 {
     Console.WriteLine();
@@ -176,18 +222,16 @@ if (mode == 1 && gameDir != null)
     string targetDll = Path.Combine(gameDir, "steam_api64.dll");
     string settingsDst = Path.Combine(gameDir, "steam_settings");
 
-    // 7a. Auto-detect Steam AppID
+    // 8a. Auto-detect Steam AppID
     string? appId = AutoDetectAppId(gameDir, gameExePath!);
     if (string.IsNullOrEmpty(appId) || appId == "0")
     {
         string gameName = Path.GetFileName(gameDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-        appId = await SteamSearchAppId(http, gameName);
+        appId = await SteamSearchAppId(gameName);
     }
 
     if (!string.IsNullOrEmpty(appId) && appId != "0")
-    {
         Console.WriteLine($"[OK]   Detected Steam AppID: {appId}");
-    }
     else
     {
         appId = "0";
@@ -195,7 +239,7 @@ if (mode == 1 && gameDir != null)
         Console.WriteLine($"       Edit {settingsDst}\\steam_appid.txt after first run.");
     }
 
-    // 7b. Backup original DLL
+    // 8b. Backup original DLL
     string backupPath = targetDll + ".bak";
     if (File.Exists(targetDll) && !File.Exists(backupPath))
     {
@@ -203,11 +247,9 @@ if (mode == 1 && gameDir != null)
         Console.WriteLine($"[OK]   Backed up original DLL → steam_api64.dll.bak");
     }
     else if (File.Exists(backupPath))
-    {
         Console.WriteLine("[INFO] Backup already exists, replacing target…");
-    }
 
-    // 7c. Copy goldberg DLL
+    // 8c. Copy goldberg DLL
     if (File.Exists(goldbergSrc))
     {
         File.Copy(goldbergSrc, targetDll, overwrite: true);
@@ -216,17 +258,16 @@ if (mode == 1 && gameDir != null)
     else
     {
         Console.Error.WriteLine($"[WARN] Goldberg DLL not found at: {goldbergSrc}");
-        Console.Error.WriteLine("       Place steam_api64.dll in ./goldberg/ next to wintun-poc.exe");
     }
 
-    // 7d. Write INI config (Goldberg only supports one ip=, use first peer)
+    // 8d. Write INI config
     string iniPath = Path.Combine(gameDir, "GoldbergSteamEmu.ini");
-    string firstPeerVPN = peers.Count > 0 ? peers[0].virtual_ip : "10.13.37.2";
-    string iniContent = $"[Networking]\nip={firstPeerVPN}\n";
-    File.WriteAllText(iniPath, iniContent);
+    string firstPeerVPN;
+    lock (peerLock) { firstPeerVPN = peers.Count > 0 ? peers[0].virtual_ip : "10.13.37.2"; }
+    File.WriteAllText(iniPath, $"[Networking]\nip={firstPeerVPN}\n");
     Console.WriteLine($"[OK]   Goldberg INI written → peer IP: {firstPeerVPN}");
 
-    // 7e. Copy steam_settings + write appid
+    // 8e. Copy steam_settings + write appid
     string settingsSrc = Path.Combine(AppContext.BaseDirectory, "goldberg", "steam_settings");
     if (Directory.Exists(settingsSrc))
     {
@@ -241,28 +282,29 @@ if (mode == 1 && gameDir != null)
         Console.WriteLine("[OK]   steam_settings/ deployed to game folder");
     }
     else
-    {
         Directory.CreateDirectory(settingsDst);
-    }
 
     File.WriteAllText(Path.Combine(settingsDst, "steam_appid.txt"), appId);
     Console.WriteLine($"[OK]   steam_appid.txt → {appId}");
     Console.WriteLine("──────────────────────────────────────────────────────");
 }
 
-// ── 8. Create UDP socket (shared: hole punch + pumps) ─────────
+// ── 9. Create UDP socket (shared: hole punch + pumps) ────────
 using var udp = new UdpClient(UdpPort);
 udp.Client.ReceiveBufferSize = 4 * 1024 * 1024;
 udp.Client.SendBufferSize    = 4 * 1024 * 1024;
 Console.WriteLine($"[OK]   UDP socket bound to 0.0.0.0:{UdpPort}");
 
-// ── 9. UDP Hole Punching (all peers) ──────────────────────────
+// ── 10. UDP Hole Punching (all peers) ─────────────────────────
 Console.WriteLine();
 Console.Write("[*]   Hole punching");
 byte[] holePunchData = new byte[] { 0x00 };
 int punchCount = 0;
 
-foreach (var p in peers)
+List<PlayerInfo> peersSnapshot;
+lock (peerLock) { peersSnapshot = new List<PlayerInfo>(peers); }
+
+foreach (var p in peersSnapshot)
 {
     try
     {
@@ -280,13 +322,19 @@ foreach (var p in peers)
     }
     await Task.Delay(100, CancellationToken.None);
 }
-Console.WriteLine($" {punchCount} packets sent to {peers.Count} peer(s)");
+Console.WriteLine($" {punchCount} packets sent to {peersSnapshot.Count} peer(s)");
 
-// ── 10. Driver version ─────────────────────────────────────────
+// ── 11. Driver version ────────────────────────────────────────
 uint ver = WintunGetRunningDriverVersion();
-Console.WriteLine($"[OK]   Wintun driver v{ver >> 16}.{ver & 0xFFFF}");
+if (ver == 0)
+{
+    Console.WriteLine("[WARN] Wintun driver not detected.");
+    Console.WriteLine("       Download and install from: https://www.wintun.net/");
+}
+else
+    Console.WriteLine($"[OK]   Wintun driver v{ver >> 16}.{ver & 0xFFFF}");
 
-// ── 11. Clean stale adapter ───────────────────────────────────
+// ── 12. Clean stale adapter ───────────────────────────────────
 IntPtr existing = WintunOpenAdapter(AdapterName);
 if (existing != IntPtr.Zero)
 {
@@ -295,20 +343,23 @@ if (existing != IntPtr.Zero)
     Thread.Sleep(500);
 }
 
-// ── 12. Create virtual adapter ────────────────────────────────
+// ── 13. Create virtual adapter ────────────────────────────────
 IntPtr adapter = WintunCreateAdapter(AdapterName, "LanEmulator", IntPtr.Zero);
 if (adapter == IntPtr.Zero)
 {
     int err = Marshal.GetLastWin32Error();
     Console.Error.WriteLine($"[FATAL] WintunCreateAdapter failed. Win32 error {err} (0x{err:X8}): {Win32Msg(err)}");
+    if (err == 1168 || err == 2 || err == 126)
+        Console.Error.WriteLine("       Wintun driver may not be installed. Download: https://www.wintun.net/");
     return 3;
 }
 Console.WriteLine($"[OK]   Adapter '{AdapterName}' created.");
 
-// ── 13. Get LUID → interface alias ────────────────────────────
+// ── 14. Get LUID → interface alias ────────────────────────────
 if (!WintunGetAdapterLUID(adapter, out ulong luid))
 {
-    Console.Error.WriteLine($"[FATAL] WintunGetAdapterLUID failed ({Marshal.GetLastWin32Error()})");
+    int err = Marshal.GetLastWin32Error();
+    Console.Error.WriteLine($"[FATAL] WintunGetAdapterLUID failed (0x{err:X8})");
     WintunCloseAdapter(adapter);
     return 4;
 }
@@ -317,19 +368,20 @@ Console.WriteLine($"[OK]   LUID: 0x{luid:X16}");
 string ifAlias = GetInterfaceAlias(luid);
 Console.WriteLine($"[OK]   Interface alias: \"{ifAlias}\"");
 
-// ── 14. Assign IP & bring up ──────────────────────────────────
+// ── 15. Assign IP & bring up ──────────────────────────────────
 RunNetsh($"interface ip set address name=\"{ifAlias}\" source=static addr={myVirtualIP} mask={AdapterMask}");
 RunNetsh($"interface set interface name=\"{ifAlias}\" admin=enabled");
 Console.WriteLine($"[OK]   IP {myVirtualIP}/{PrefixLength} assigned, interface UP");
 
-// ── 15. Add routes for all peers ──────────────────────────────
-foreach (var p in peers)
+// ── 16. Add routes for all peers ──────────────────────────────
+lock (peerLock)
 {
-    RunRoute($"add {p.virtual_ip} mask 255.255.255.255 {myVirtualIP} metric 1");
+    foreach (var p in peers)
+        RunRoute($"add {p.virtual_ip} mask 255.255.255.255 {myVirtualIP} metric 1");
 }
-Console.WriteLine($"[OK]   Routes added: {peers.Count} peer(s) → via {myVirtualIP}");
+Console.WriteLine($"[OK]   Routes added for {peersSnapshot.Count} peer(s) → via {myVirtualIP}");
 
-// ── 16. Start Wintun session (Ring Buffer) ────────────────────
+// ── 17. Start Wintun session (Ring Buffer) ────────────────────
 const uint RingCapacity = 0x400000;
 IntPtr session = WintunStartSession(adapter, RingCapacity);
 if (session == IntPtr.Zero)
@@ -341,14 +393,14 @@ if (session == IntPtr.Zero)
 }
 Console.WriteLine($"[OK]   Wintun session started (ring: {RingCapacity / 1024 / 1024} MiB)");
 
-// ── 17. Launch packet pumps (share the same UDP socket) ───────
+// ── 18. Launch packet pumps + keepalive ───────────────────────
 using var cts = new CancellationTokenSource();
 
 var pumpNetToTun = new Thread(() => PumpNetworkToTun(udp, session, cts.Token))
 {
     Name = "Net→Tun", IsBackground = true
 };
-var pumpTunToNet = new Thread(() => PumpTunToNet(udp, session, ipToPeer, cts.Token))
+var pumpTunToNet = new Thread(() => PumpTunToNet(udp, session, ipToPeer, peerLock, cts.Token))
 {
     Name = "Tun→Net", IsBackground = true
 };
@@ -357,7 +409,10 @@ pumpNetToTun.Start();
 pumpTunToNet.Start();
 Console.WriteLine("[OK]   Packet pump threads running");
 
-// ── 18. Launch the game (Steam mode only) ─────────────────────
+// Background re-register + re-poll for disconnect detection
+var keepaliveTask = KeepAliveAsync(http, roomId, UdpPort, peers, ipToPeer, peerLock, cts.Token);
+
+// ── 19. Launch the game (Steam mode only) ─────────────────────
 Process? gameProcess = null;
 if (mode == 1 && gameExePath != null)
 {
@@ -376,7 +431,7 @@ if (mode == 1 && gameExePath != null)
     }
 }
 
-// ── 19. Display & wait for ESC ────────────────────────────────
+// ── 20. Display & wait for ESC ────────────────────────────────
 Console.WriteLine();
 Console.WriteLine("╔═══════════════════════════════════════════════════════╗");
 if (mode == 1)
@@ -385,14 +440,18 @@ else
     Console.WriteLine("║  Virtual LAN ACTIVE — Launch your game manually.     ║");
 Console.WriteLine("║                                                       ║");
 Console.WriteLine($"║  My  IP    : {myVirtualIP}/{PrefixLength,-30}║");
-Console.WriteLine($"║  Peers     : {peers.Count,-38}║");
-for (int i = 0; i < Math.Min(peers.Count, 5); i++)
+
+lock (peerLock)
 {
-    var p = peers[i];
-    Console.WriteLine($"║    [{i + 1}] {p.player_id,-12} {p.virtual_ip,-16} {p.ip,-16}║");
+    Console.WriteLine($"║  Peers     : {peers.Count,-38}║");
+    for (int i = 0; i < Math.Min(peers.Count, 5); i++)
+    {
+        var p = peers[i];
+        Console.WriteLine($"║    [{i + 1}] {p.player_id,-12} {p.virtual_ip,-16} {p.ip,-16}║");
+    }
+    if (peers.Count > 5)
+        Console.WriteLine($"║    ... and {peers.Count - 5} more                              ║");
 }
-if (peers.Count > 5)
-    Console.WriteLine($"║    ... and {peers.Count - 5} more                              ║");
 Console.WriteLine($"║  UDP       : 0.0.0.0:{UdpPort,-31}║");
 Console.WriteLine($"║  Room      : {roomId,-38}║");
 Console.WriteLine($"║  Mode      : {(mode == 1 ? "Steam + Goldberg" : "Pure LAN"),-38}║");
@@ -404,11 +463,17 @@ Console.WriteLine("╚═══════════════════�
 
 while (Console.ReadKey(true).Key != ConsoleKey.Escape) { }
 
-// ── 20. Cleanup ───────────────────────────────────────────────
+// ── 21. Cleanup ───────────────────────────────────────────────
 Console.WriteLine();
 Console.WriteLine("[*] Shutting down…");
 
-// Kill game process (Steam mode only)
+cts.Cancel();
+
+// Notify server
+try { await http.PostAsync($"/leave?room_id={Uri.EscapeDataString(roomId)}&player_id={Uri.EscapeDataString(Environment.MachineName)}", null); }
+catch { /* best effort */ }
+
+// Kill game (Steam mode)
 if (mode == 1 && gameProcess is { HasExited: false })
 {
     Console.WriteLine($"[*]   Terminating game (PID {gameProcess.Id})…");
@@ -424,7 +489,9 @@ if (mode == 1 && gameProcess is { HasExited: false })
     }
 }
 
-cts.Cancel();
+// Wait for pumps & keepalive
+try { await keepaliveTask; } catch { }
+
 pumpNetToTun.Join(3000);
 pumpTunToNet.Join(3000);
 
@@ -437,12 +504,87 @@ Console.WriteLine("[OK]   Adapter closed and removed from system.");
 udp.Close();
 Console.WriteLine("[OK]   UDP socket closed.");
 
-foreach (var p in peers)
-    RunRoute($"delete {p.virtual_ip}");
-Console.WriteLine($"[OK]   Routes removed ({peers.Count} peers).");
+lock (peerLock)
+{
+    foreach (var p in peers)
+        RunRoute($"delete {p.virtual_ip}");
+}
+Console.WriteLine($"[OK]   Routes removed.");
 
 Console.WriteLine("[DONE] Cleanup complete.");
 return 0;
+
+
+// ═══════════════════════════════════════════════════════════════
+// Keepalive: re-register + re-poll for disconnect detection
+// ═══════════════════════════════════════════════════════════════
+
+static async Task KeepAliveAsync(
+    HttpClient http, string roomId, int udpPort,
+    List<PlayerInfo> peers, Dictionary<string, IPEndPoint> ipToPeer,
+    object peerLock, CancellationToken ct)
+{
+    string myId = Environment.MachineName;
+    var knownIds = new HashSet<string>();
+    lock (peerLock) { foreach (var p in peers) knownIds.Add(p.player_id); }
+
+    while (!ct.IsCancellationRequested)
+    {
+        try
+        {
+            await Task.Delay(10_000, ct);
+
+            // Re-register to refresh server presence
+            var regReq = new { player_id = myId, room_id = roomId, udp_port = udpPort };
+            await http.PostAsJsonAsync("/register", regReq, ct);
+
+            // Poll for changes
+            var poll = await http.GetFromJsonAsync<PollResponse>(
+                $"/poll?room_id={Uri.EscapeDataString(roomId)}", ct);
+
+            if (poll is not { status: "ready", players: not null }) continue;
+
+            var current = poll.players.FindAll(p =>
+                !string.Equals(p.player_id, myId, StringComparison.OrdinalIgnoreCase));
+
+            var currentIds = new HashSet<string>();
+            foreach (var p in current) currentIds.Add(p.player_id);
+
+            // Detect peers who left
+            lock (peerLock)
+            {
+                var left = new List<string>();
+                for (int i = peers.Count - 1; i >= 0; i--)
+                {
+                    if (!currentIds.Contains(peers[i].player_id))
+                    {
+                        left.Add($"{peers[i].player_id} ({peers[i].virtual_ip})");
+                        ipToPeer.Remove(peers[i].virtual_ip);
+                        RunRouteSilent($"delete {peers[i].virtual_ip}");
+                        peers.RemoveAt(i);
+                    }
+                }
+                foreach (var msg in left)
+                    Console.WriteLine($"\n[PEER LEFT] {msg}");
+
+                // Detect new peers
+                foreach (var p in current)
+                {
+                    if (!knownIds.Contains(p.player_id))
+                    {
+                        peers.Add(p);
+                        ipToPeer[p.virtual_ip] = new IPEndPoint(IPAddress.Parse(p.ip), p.udp_port);
+                        Console.WriteLine($"\n[PEER JOIN] {p.player_id} VPN: {p.virtual_ip} Public: {p.ip}:{p.udp_port}");
+                    }
+                }
+            }
+
+            knownIds = currentIds;
+        }
+        catch (OperationCanceledException) { break; }
+        catch { /* transient error — retry next cycle */ }
+    }
+}
 
 
 // ═══════════════════════════════════════════════════════════════
@@ -483,7 +625,8 @@ static void PumpNetworkToTun(UdpClient udp, IntPtr session, CancellationToken ct
     }
 }
 
-static void PumpTunToNet(UdpClient udp, IntPtr session, Dictionary<string, IPEndPoint> ipToPeer, CancellationToken ct)
+static void PumpTunToNet(UdpClient udp, IntPtr session,
+    Dictionary<string, IPEndPoint> ipToPeer, object peerLock, CancellationToken ct)
 {
     IntPtr readEvent = WintunGetReadWaitEvent(session);
     if (readEvent == IntPtr.Zero)
@@ -494,8 +637,6 @@ static void PumpTunToNet(UdpClient udp, IntPtr session, Dictionary<string, IPEnd
 
     var waitHandle = new EventWaitHandle(false, EventResetMode.AutoReset);
     waitHandle.SafeWaitHandle = new Microsoft.Win32.SafeHandles.SafeWaitHandle(readEvent, ownsHandle: false);
-
-    // Pre-allocate array to avoid GC pressure in hot loop
     var readEventArray = new[] { readEvent };
 
     try
@@ -508,20 +649,32 @@ static void PumpTunToNet(UdpClient udp, IntPtr session, Dictionary<string, IPEnd
                 if (packet == IntPtr.Zero)
                 {
                     int err = Marshal.GetLastWin32Error();
-                    if (err == 259) break;   // ring buffer empty
-                    if (err == 38) return;   // session ended
+                    if (err == 259) break;
+                    if (err == 38) return;
                     break;
                 }
 
                 byte[] buffer = new byte[packetSize];
                 Marshal.Copy(packet, buffer, 0, (int)packetSize);
 
-                // Parse destination IP from raw IPv4 packet (bytes 16-19)
                 if (buffer.Length >= 20)
                 {
                     var dstIP = new IPAddress(buffer[16..20]);
-                    if (ipToPeer.TryGetValue(dstIP.ToString(), out var ep))
-                        udp.Send(buffer, buffer.Length, ep);
+
+                    lock (peerLock)
+                    {
+                        if (ipToPeer.TryGetValue(dstIP.ToString(), out var ep))
+                        {
+                            udp.Send(buffer, buffer.Length, ep);
+                        }
+                        else if (IsBroadcast(dstIP))
+                        {
+                            // Forward broadcast to all peers
+                            foreach (var kv in ipToPeer)
+                                udp.Send(buffer, buffer.Length, kv.Value);
+                        }
+                        // else: unknown destination — drop
+                    }
                 }
 
                 WintunReleaseReceivePacket(session, packet);
@@ -541,6 +694,14 @@ static void PumpTunToNet(UdpClient udp, IntPtr session, Dictionary<string, IPEnd
     {
         waitHandle.SafeWaitHandle = new Microsoft.Win32.SafeHandles.SafeWaitHandle(IntPtr.Zero, ownsHandle: false);
     }
+}
+
+static bool IsBroadcast(IPAddress ip)
+{
+    byte[] b = ip.GetAddressBytes();
+    // 255.255.255.255 (limited broadcast) or x.x.x.255 (subnet broadcast /24)
+    return b[0] == 255 && b[1] == 255 && b[2] == 255 && b[3] == 255
+        || (b.Length == 4 && b[3] == 255);
 }
 
 
@@ -606,6 +767,23 @@ static void RunRoute(string args)
     if (proc.ExitCode != 0) Console.Error.WriteLine($"   [WARN] route exit code: {proc.ExitCode}");
 }
 
+static void RunRouteSilent(string args)
+{
+    using var proc = new Process
+    {
+        StartInfo = new ProcessStartInfo("route", args)
+        {
+            UseShellExecute        = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError  = true,
+            CreateNoWindow         = true
+        }
+    };
+    proc.Start();
+    proc.WaitForExit(5000);
+    // silent — no console output
+}
+
 static string GetInterfaceAlias(ulong luid)
 {
     char[] buffer = new char[512];
@@ -618,10 +796,8 @@ static string GetInterfaceAlias(ulong luid)
     return new string(buffer, 0, end >= 0 ? end : buffer.Length);
 }
 
-/// <summary>Try to detect Steam AppID from game folder.</summary>
 static string? AutoDetectAppId(string gameDir, string gameExePath)
 {
-    // 1. steam_appid.txt in game dir
     string[] candidates =
     {
         Path.Combine(gameDir, "steam_appid.txt"),
@@ -642,7 +818,6 @@ static string? AutoDetectAppId(string gameDir, string gameExePath)
         }
     }
 
-    // 2. Scan steam_api64.dll for embedded AppID
     string dllPath = Path.Combine(gameDir, "steam_api64.dll");
     string bakPath = dllPath + ".bak";
     string? scanPath = File.Exists(dllPath) ? dllPath : File.Exists(bakPath) ? bakPath : null;
@@ -659,10 +834,9 @@ static string? AutoDetectAppId(string gameDir, string gameExePath)
                 return found;
             }
         }
-        catch { /* ignore dll scan errors */ }
+        catch { }
     }
 
-    // 3. Check .ini files for SteamAppId or AppId
     foreach (string iniFile in Directory.GetFiles(gameDir, "*.ini"))
     {
         try
@@ -681,7 +855,7 @@ static string? AutoDetectAppId(string gameDir, string gameExePath)
                 }
             }
         }
-        catch { /* skip unreadable files */ }
+        catch { }
     }
 
     return null;
@@ -711,7 +885,7 @@ static string? ScanDllForAppId(byte[] dllBytes)
     return null;
 }
 
-static async Task<string?> SteamSearchAppId(HttpClient http, string gameName)
+static async Task<string?> SteamSearchAppId(string gameName)
 {
     try
     {
@@ -721,13 +895,11 @@ static async Task<string?> SteamSearchAppId(HttpClient http, string gameName)
         var resp = await steamHttp.GetStringAsync(url);
         using var json = System.Text.Json.JsonDocument.Parse(resp);
 
-        if (json.RootElement.GetArrayLength() == 0)
-            return null;
+        if (json.RootElement.GetArrayLength() == 0) return null;
 
         var results = json.RootElement.EnumerateArray().ToArray();
         if (results.Length == 0) return null;
 
-        // Exact name match first
         foreach (var item in results)
         {
             string? name = item.GetProperty("name").GetString();
@@ -747,7 +919,6 @@ static async Task<string?> SteamSearchAppId(HttpClient http, string gameName)
             return appId.ToString();
         }
 
-        // Multiple results: interactive picker
         Console.WriteLine("   Multiple Steam results found:");
         for (int i = 0; i < Math.Min(results.Length, 5); i++)
         {
