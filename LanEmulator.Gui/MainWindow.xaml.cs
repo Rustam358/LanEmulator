@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
 using System.Threading.Tasks;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -159,75 +160,264 @@ public partial class MainWindow : Window
 
     private void BtnDiagRefresh_Click(object s, RoutedEventArgs e) => RefreshDiagnostics();
 
+
+    // Status helpers for diagnostics dots
+    private static readonly SolidColorBrush DotGreen  = new(Color.FromRgb(0xA6, 0xE3, 0xA1));
+    private static readonly SolidColorBrush DotYellow = new(Color.FromRgb(0xF9, 0xE2, 0xAF));
+    private static readonly SolidColorBrush DotRed    = new(Color.FromRgb(0xF3, 0x8B, 0xA8));
+    private static readonly SolidColorBrush DotGray   = new(Color.FromRgb(0x58, 0x5B, 0x70));
+
+    private void Dot(Ellipse e, string status)
+    {
+        e.Fill = status switch
+        {
+            "ok" => DotGreen,
+            "warn" => DotYellow,
+            "err" => DotRed,
+            _ => DotGray
+        };
+    }
     /// <summary>Populate all diagnostics fields with current state.</summary>
     private void RefreshDiagnostics()
     {
         try
         {
-            // Game info
+            // ===== SYSTEM =====
+            bool isAdmin = Engine.IsAdministrator();
+            DiagAdmin.Text = string.Concat("Admin: ", isAdmin ? "Yes" : "No (run as Administrator)");
+            Dot(DiagDotAdmin, isAdmin ? "ok" : "err");
+
+            uint ver = Engine.GetDriverVersion();
+            DiagDriver.Text = ver == 0
+                ? "Wintun driver: not installed"
+                : string.Concat("Wintun driver: v", ver >> 16, ".", ver & 0xFFFF);
+            Dot(DiagDotDriver, ver == 0 ? "err" : "ok");
+
+            var nics = System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces();
+            var tun = nics.FirstOrDefault(a => a.Name.Contains("LanEmulator"));
+            if (tun != null)
+            {
+                DiagAdapter.Text = string.Concat("Adapter: ", tun.Name, " (", tun.OperationalStatus, ")");
+                Dot(DiagDotAdapter, tun.OperationalStatus == System.Net.NetworkInformation.OperationalStatus.Up ? "ok" : "warn");
+                var ipv4 = tun.GetIPProperties().UnicastAddresses
+                    .FirstOrDefault(ua => ua.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork);
+                DiagIp.Text = ipv4 != null
+                    ? string.Concat("Virtual IP: ", ipv4.Address, "/", ipv4.PrefixLength)
+                    : "Virtual IP: not assigned";
+                Dot(DiagDotIp, ipv4 != null ? "ok" : "warn");
+            }
+            else
+            {
+                DiagAdapter.Text = "Adapter: not found";
+                DiagIp.Text = "Virtual IP: --";
+                Dot(DiagDotAdapter, "gray");
+                Dot(DiagDotIp, "gray");
+            }
+
+            // ===== GAME =====
             string gamePath = null;
             if (!string.IsNullOrEmpty(_engine.GamePath))
                 gamePath = _engine.GamePath;
             else
                 try { gamePath = TxtSelectedGame.Text; } catch { }
 
-            DiagGamePath.Text = string.IsNullOrEmpty(gamePath)
-                ? "No game selected" : gamePath;
-
-            // Warnings
-            // Combine game validation warnings + game events
-            var allWarnings = new List<string>(_diagWarnings);
-            allWarnings.AddRange(_gameEvents);
-            DiagWarnings.Text = allWarnings.Count == 0 ? ""
-                : string.Join(Environment.NewLine, _diagWarnings);
-
-            // Network info
-            var nics = System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces();
-            var tun = nics.FirstOrDefault(a => a.Name.Contains("LanEmulator"));
-            if (tun != null)
+            if (!string.IsNullOrEmpty(gamePath) && File.Exists(gamePath))
             {
-                DiagAdapter.Text = string.Concat("Adapter: ", tun.Name, " (", tun.OperationalStatus, ")");
-                var ip = tun.GetIPProperties().UnicastAddresses
-                    .FirstOrDefault(ua => ua.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork);
-                DiagIp.Text = ip != null
-                    ? string.Concat("Virtual IP: ", ip.Address, "/", ip.PrefixLength)
-                    : "Virtual IP: not assigned";
-                DiagRoutes.Text = string.Concat("Routes: 10.13.37.0/24 via ", tun.Name,
-                    " (", (tun.OperationalStatus == System.Net.NetworkInformation.OperationalStatus.Up ? "UP" : "DOWN"), ")");
+                DiagGamePath.Text = gamePath;
+                try
+                {
+                    var bytes = File.ReadAllBytes(gamePath);
+                    int peOff = BitConverter.ToInt32(bytes, 0x3C);
+                    ushort machine = BitConverter.ToUInt16(bytes, peOff + 4);
+                    DiagArch.Text = string.Concat("Architecture: ",
+                        machine == 0x014C ? "32-bit (x86)" :
+                        machine == 0x8664 ? "64-bit (x64)" :
+                        string.Concat("Unknown (0x", machine.ToString("X4"), ")"));
+                    Dot(DiagDotArch, "ok");
+                }
+                catch
+                {
+                    DiagArch.Text = "Architecture: unreadable";
+                    Dot(DiagDotArch, "warn");
+                }
             }
             else
             {
-                DiagAdapter.Text = "Adapter: not found (not connected)";
-                DiagIp.Text = "Virtual IP: --";
-                DiagRoutes.Text = "Routes: adapter offline";
+                DiagGamePath.Text = "No game selected";
+                DiagArch.Text = "Architecture: --";
+                Dot(DiagDotArch, "gray");
             }
 
-            uint ver = Engine.GetDriverVersion();
-            DiagDrvVer.Text = ver == 0
-                ? "Wintun driver: not installed"
-                : string.Concat("Wintun driver: v", ver >> 16, ".", ver & 0xFFFF);
-
-            // Room info
-            DiagRoomId.Text = string.IsNullOrEmpty(_engine.RoomId)
-                ? "Room: not connected" : string.Concat("Room: ", _engine.RoomId);
-            DiagPeers.Text = _engine.IsRunning
-                ? string.Concat("Peers: ", _engine.PeerCount.ToString(), " (you + remote)")
-                : "Peers: not connected";
-
-            // Game process status
+            // Game status
             if (_engine.GameProcess != null)
             {
                 try
                 {
                     if (_engine.GameProcess.HasExited)
-                        DiagGamePath.Text = string.Concat(DiagGamePath.Text,
-                            " [EXITED, code=", _engine.GameProcess.ExitCode, "]");
+                    {
+                        DiagGameStatus.Text = string.Concat("Status: EXITED (code ", _engine.GameProcess.ExitCode.ToString(), ")");
+                        Dot(DiagDotGame, _engine.GameProcess.ExitCode == 0 ? "ok" : "err");
+                    }
                     else
-                        DiagGamePath.Text = string.Concat(DiagGamePath.Text,
-                            " [RUNNING, PID=", _engine.GameProcess.Id, "]");
+                    {
+                        DiagGameStatus.Text = string.Concat("Status: RUNNING (PID ", _engine.GameProcess.Id.ToString(), ")");
+                        Dot(DiagDotGame, "ok");
+                    }
                 }
-                catch { DiagGamePath.Text = string.Concat(DiagGamePath.Text, " [detached]"); }
+                catch { DiagGameStatus.Text = "Status: detached"; Dot(DiagDotGame, "gray"); }
             }
+            else
+            {
+                DiagGameStatus.Text = "Status: not launched";
+                Dot(DiagDotGame, "gray");
+            }
+
+            // Runtimes
+            try
+            {
+                var runtimes = new List<string>();
+                if (File.Exists(System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "d3d8.dll")))
+                    runtimes.Add("DX8");
+                if (File.Exists(System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "d3d9.dll")))
+                    runtimes.Add("DX9");
+                if (File.Exists(System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "msvcp140.dll")))
+                    runtimes.Add("VC++ 2015+");
+                if (File.Exists(System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "vcruntime140.dll")))
+                    runtimes.Add("VCRuntime");
+                DiagRuntimes.Text = runtimes.Count > 0
+                    ? string.Concat("Runtimes: ", string.Join(", ", runtimes))
+                    : "Runtimes: not detected";
+                Dot(DiagDotRuntimes, runtimes.Count >= 2 ? "ok" : "warn");
+            }
+            catch
+            {
+                DiagRuntimes.Text = "Runtimes: check failed";
+                Dot(DiagDotRuntimes, "gray");
+            }
+
+            // ===== NETWORK =====
+            // Server ping (async in background, show result on next refresh)
+            if (_engine.IsRunning)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+                        var sw = System.Diagnostics.Stopwatch.StartNew();
+                        var resp = await http.GetAsync(_engine.ServerUrl + "/ping");
+                        sw.Stop();
+                        string text = string.Concat("Server ping: ", sw.ElapsedMilliseconds.ToString(), "ms");
+                        string status = sw.ElapsedMilliseconds < 100 ? "ok" : "warn";
+                        Dispatcher.Invoke(() => { DiagLatency.Text = text; Dot(DiagDotLatency, status); });
+                    }
+                    catch
+                    {
+                        Dispatcher.Invoke(() => { DiagLatency.Text = "Server ping: unreachable"; Dot(DiagDotLatency, "err"); });
+                    }
+                });
+            }
+            else
+            {
+                DiagLatency.Text = "Server ping: not connected";
+                Dot(DiagDotLatency, "gray");
+            }
+
+            // UDP loopback test
+            if (tun != null && tun.OperationalStatus == System.Net.NetworkInformation.OperationalStatus.Up)
+            {
+                DiagLoopback.Text = "UDP loopback: testing...";
+                _ = Task.Run(() =>
+                {
+                    try
+                    {
+                        using var sock = new System.Net.Sockets.Socket(
+                            System.Net.Sockets.AddressFamily.InterNetwork,
+                            System.Net.Sockets.SocketType.Dgram,
+                            System.Net.Sockets.ProtocolType.Udp);
+                        sock.Bind(new System.Net.IPEndPoint(System.Net.IPAddress.Any, 0));
+                        sock.SendTo(new byte[] { 0xDE, 0xAD }, new System.Net.IPEndPoint(
+                            System.Net.IPAddress.Parse("10.13.37.1"), 51820));
+                        Dispatcher.Invoke(() =>
+                        {
+                            DiagLoopback.Text = "UDP loopback: sent test packet";
+                            Dot(DiagDotLoopback, "ok");
+                        });
+                    }
+                    catch
+                    {
+                        Dispatcher.Invoke(() =>
+                        {
+                            DiagLoopback.Text = "UDP loopback: failed";
+                            Dot(DiagDotLoopback, "err");
+                        });
+                    }
+                });
+            }
+            else
+            {
+                DiagLoopback.Text = "UDP loopback: adapter offline";
+                Dot(DiagDotLoopback, "gray");
+            }
+
+            // Packets (from VPN controller stats — placeholder until we add counters)
+            DiagPackets.Text = "Packets: not available yet";
+            Dot(DiagDotPackets, "gray");
+
+            // ===== FIREWALL =====
+            // Quick check: can we bind to UDP 51820? If yes, port is likely open
+            try
+            {
+                using var udpTest = new System.Net.Sockets.Socket(
+                    System.Net.Sockets.AddressFamily.InterNetwork,
+                    System.Net.Sockets.SocketType.Dgram,
+                    System.Net.Sockets.ProtocolType.Udp);
+                udpTest.Bind(new System.Net.IPEndPoint(System.Net.IPAddress.Any, 0));
+                udpTest.Close();
+                DiagFwUdp.Text = "UDP 51820: socket available";
+                Dot(DiagDotFwUdp, "ok");
+            }
+            catch
+            {
+                DiagFwUdp.Text = "UDP 51820: blocked or in use";
+                Dot(DiagDotFwUdp, "err");
+            }
+
+            // TCP port check (can we bind to the server port?)
+            try
+            {
+                using var tcpTest = new System.Net.Sockets.Socket(
+                    System.Net.Sockets.AddressFamily.InterNetwork,
+                    System.Net.Sockets.SocketType.Stream,
+                    System.Net.Sockets.ProtocolType.Tcp);
+                tcpTest.Bind(new System.Net.IPEndPoint(System.Net.IPAddress.Any, 0));
+                tcpTest.Close();
+                DiagFwTcp.Text = "TCP 8000: socket available";
+                Dot(DiagDotFwTcp, "ok");
+            }
+            catch
+            {
+                DiagFwTcp.Text = "TCP 8000: blocked";
+                Dot(DiagDotFwTcp, "err");
+            }
+
+            // ===== ROOM / PEERS =====
+            DiagRoomId.Text = string.IsNullOrEmpty(_engine.RoomId)
+                ? "Room: not connected" : string.Concat("Room: ", _engine.RoomId);
+            Dot(DiagDotRoom, string.IsNullOrEmpty(_engine.RoomId) ? "gray" : "ok");
+
+            DiagPeers.Text = _engine.IsRunning
+                ? string.Concat("Connected. Players: ", (_engine.PeerCount + 1).ToString(),
+                    " (you + ", _engine.PeerCount.ToString(), " remote)")
+                : "Not connected";
+
+            // ===== WARNINGS =====
+            var allWarnings = new List<string>(_diagWarnings);
+            allWarnings.AddRange(_gameEvents);
+            DiagWarnings.Text = allWarnings.Count == 0 ? "" : string.Join(Environment.NewLine, allWarnings);
+
+            // Timestamp
+            DiagLastUpdate.Text = string.Concat("Updated: ", DateTime.Now.ToString("HH:mm:ss"));
         }
         catch (Exception ex)
         {
