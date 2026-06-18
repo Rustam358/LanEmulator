@@ -97,6 +97,13 @@ public class VpnController : IVpnController
         }
     }
 
+    /// <summary>Send a signaling packet through the UDP socket (for hole punch / join requests).</summary>
+    public void SendSignaling(byte[] data, IPEndPoint destination)
+    {
+        try { _udp?.Send(data, data.Length, destination); }
+        catch { /* best-effort */ }
+    }
+
     public async Task StopAsync(string adapterName)
     {
         IsRunning = false;

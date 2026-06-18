@@ -18,6 +18,11 @@ public interface IVpnController
         IPeerRegistry peerRegistry,
         Pumps.SignalingHandler? onSignaling = null);
 
+    /// <summary>Send a signaling packet through the UDP socket (for hole punch / join requests).</summary>
+    void SendSignaling(byte[] data, IPEndPoint destination);
+
+    /// <summary>Send a signaling packet through the UDP socket (for hole punch / join requests).</summary>
+
     /// <summary>Gracefully stop pumps, close adapter, clean up routes and firewall.</summary>
     Task StopAsync(string adapterName);
 }

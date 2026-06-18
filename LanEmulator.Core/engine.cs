@@ -34,6 +34,7 @@ public class Engine : IEngine
     public IPEndPoint? StunEndpoint { get; private set; }
     public string? StunLink { get; private set; }
     private IPEndPoint? _hostStunEndpoint;
+    private int _vipCounter = 1;
 
     public string InviteUrl => string.IsNullOrEmpty(PublicIP)
         ? ServerUrl
@@ -130,12 +131,12 @@ public class Engine : IEngine
     // ════════════════════════════════════════════════════════
 
     /// <summary>Phase 1: Start built-in C# HTTP server (host only).</summary>
-    public Task HostSetupAsync()
+    public async Task HostSetupAsync()
     {
         IsHost = true;
         RoomId = GenerateRoomId();
         OnRoomCreated?.Invoke(RoomId);
-        Log(LogLevel.Info, $"Room ID: {RoomId}");
+        Log(LogLevel.Info, string.Concat("Room ID: ", RoomId));
 
         Log(LogLevel.Info, "Starting built-in signaling server...");
         try
@@ -144,18 +145,34 @@ public class Engine : IEngine
         }
         catch (Exception ex)
         {
-            Log(LogLevel.Error, $"Server start failed: {ex.Message}");
+            Log(LogLevel.Error, string.Concat("Server start failed: ", ex.Message));
             throw;
         }
 
         string localIp = GetLocalIP();
-        ServerUrl = $"http://{localIp}:{ServerHttpPort}";
-        Log(LogLevel.Ok, $"Server at {ServerUrl}");
+        ServerUrl = string.Concat("http://", localIp, ":", ServerHttpPort.ToString());
+        Log(LogLevel.Ok, string.Concat("Server at ", ServerUrl));
 
         _signaling.AddFirewallRules(ServerHttpPort, UdpPort);
 
-
-        return Task.CompletedTask;
+        // STUN discovery for remote connections
+        Log(LogLevel.Info, "STUN: discovering public endpoint...");
+        try
+        {
+            StunEndpoint = await StunClient.GetPublicEndpointAsync(localIp);
+            if (StunEndpoint != null)
+            {
+                PublicIP = StunEndpoint.Address.ToString();
+                StunLink = string.Concat(RoomId, "@", PublicIP, ":", StunEndpoint.Port.ToString());
+                Log(LogLevel.Ok, string.Concat("STUN endpoint: ", StunLink));
+            }
+            else
+                Log(LogLevel.Warn, "STUN: no response — LAN-only mode");
+        }
+        catch (Exception ex)
+        {
+            Log(LogLevel.Warn, string.Concat("STUN failed: ", ex.Message, " — LAN-only mode"));
+        }
     }
 
     /// <summary>Phase 1b: Join -- discover or enter server URL.</summary>
@@ -167,14 +184,40 @@ public class Engine : IEngine
         if (!string.IsNullOrWhiteSpace(cliUrl))
             return cliUrl.TrimEnd('/');
 
+        // Parse STUN link: RoomId@ip:port
+        if (!string.IsNullOrWhiteSpace(hostStunLink))
+        {
+            string link = hostStunLink.Trim();
+            int at = link.IndexOf('@');
+            if (at > 0)
+            {
+                RoomId = link[..at];
+                string endpoint = link[(at + 1)..];
+                int colon = endpoint.LastIndexOf(':');
+                if (colon > 0 && int.TryParse(endpoint[(colon + 1)..], out int port))
+                {
+                    string ip = endpoint[..colon];
+                    if (IPAddress.TryParse(ip, out var addr))
+                    {
+                        _hostStunEndpoint = new IPEndPoint(addr, port);
+                        ServerUrl = string.Concat("http://", ip, ":", ServerHttpPort.ToString());
+                        Log(LogLevel.Ok, string.Concat("Remote host: ", link));
+                        return ServerUrl;
+                    }
+                }
+            }
+            // Not a STUN link, treat as URL
+            return link;
+        }
+
         Log(LogLevel.Info, "Scanning LAN for servers:");
         string? found = _signaling.Discover(GetLocalIP(), DiscoveryPort);
         if (found != null)
         {
-            Log(LogLevel.Ok, $"Found server: {found}");
+            Log(LogLevel.Ok, string.Concat("Found server: ", found));
             return found;
         }
-        return ""; // GUI will prompt user
+        return "";
     }
 
     /// <summary>Phase 2: Set mode, room, game path.</summary>
@@ -322,6 +365,28 @@ public class Engine : IEngine
 
         _cts = new CancellationTokenSource();
 
+        // If connecting to remote host via STUN, do the join handshake
+        if (!IsHost && _hostStunEndpoint != null)
+        {
+            Log(LogLevel.Info, string.Concat("Joining remote host ", _hostStunEndpoint));
+            var joinReq = UdpSignaling.Build(UdpSignaling.TypeJoinReq, new UdpSignaling.JoinRequest(
+                Environment.MachineName, RoomId, "0.0.0.0", 0));
+            // Send join requests and wait for ack
+            for (int i = 0; i < 20; i++)
+            {
+                try { _vpn.SendSignaling(joinReq, _hostStunEndpoint); }
+                catch { }
+                Thread.Sleep(200);
+                // Check if we received a join ack (MyVirtualIP was set by HandleSignaling)
+                if (!string.IsNullOrEmpty(MyVirtualIP) && MyVirtualIP != "10.13.37.1")
+                {
+                    Log(LogLevel.Ok, string.Concat("Join acknowledged! VPN IP: ", MyVirtualIP));
+                    break;
+                }
+            }
+            if (string.IsNullOrEmpty(MyVirtualIP) || MyVirtualIP == "10.13.37.1")
+                Log(LogLevel.Warn, "No join acknowledgment — tunnel may not be ready");
+        }
 
         _keepaliveTask = KeepAlive.RunAsync(_http!, RoomId, UdpPort, _peerReg, _cts.Token,
             (p) => Log(LogLevel.PeerJoin, $"{p.player_id} VPN: {p.virtual_ip}"),
@@ -427,35 +492,54 @@ public class Engine : IEngine
 
         switch (type)
         {
-            case UdpSignaling.TypeJoinReq:
+case UdpSignaling.TypeJoinReq:
                 var req = UdpSignaling.ParseJoinRequest(json);
                 if (req == null || req.room_id != RoomId) return;
                 Log(LogLevel.PeerJoin, string.Concat("Join request from ", req.player_id, " @ ", remote));
-                // Add peer with remote's STUN endpoint
-                string vip = string.Concat("10.13.37.", (_peerReg.Count + 1).ToString());
-                var peer = new PlayerInfo(req.player_id, remote.Address.ToString(), remote.Port, vip);
+                // Add peer with remote's STUN endpoint (VIP assigned by HTTP server on registration)
+                var peer = new PlayerInfo(req.player_id, remote.Address.ToString(), remote.Port, "");
                 _peerReg.AddExternalPeer(peer);
-                // Send acknowledgment
+                // Send acknowledgment (no VIP yet — client gets it from HTTP server via tunnel)
                 var ack = UdpSignaling.Build(UdpSignaling.TypeJoinAck, new UdpSignaling.JoinAck(
-                    Environment.MachineName, peer.virtual_ip, UdpPort));
+                    Environment.MachineName, "", UdpPort));
                 udp.Send(ack, ack.Length, remote);
                 OnPeerJoined?.Invoke(peer);
                 break;
 
             case UdpSignaling.TypeJoinAck:
-                var ackData = System.Text.Json.JsonSerializer.Deserialize<UdpSignaling.JoinAck>(
-                    json, UdpSignaling.JsonOpts);
-                if (ackData != null)
-                {
-                    Log(LogLevel.Ok, string.Concat("Joined! Virtual IP: ", ackData.virtual_ip));
-                    MyVirtualIP = ackData.virtual_ip;
-                }
+                Log(LogLevel.Ok, "Join acknowledged by host");
                 break;
 
             case UdpSignaling.TypePoll:
             case UdpSignaling.TypePollResp:
                 // Future: UDP-based peer polling
                 break;
+        }
+    }
+
+    /// <summary>
+    /// For remote connections: connect to the host's HTTP server through the VPN tunnel.
+    /// Call this after StartVpnAsync() when using STUN-based P2P.
+    /// </summary>
+    public async Task ConnectRemoteAsync()
+    {
+        if (_hostStunEndpoint == null) return;
+        string tunnelUrl = string.Concat("http://10.13.37.1:", ServerHttpPort.ToString());
+        Log(LogLevel.Info, string.Concat("Connecting through VPN tunnel: ", tunnelUrl));
+        var handler = new HttpClientHandler();
+        _http = new HttpClient(handler) { BaseAddress = new Uri(tunnelUrl) };
+        _http.Timeout = TimeSpan.FromSeconds(10);
+        _signaling.HttpClient = _http;
+        string myId = Environment.MachineName;
+        try
+        {
+            MyVirtualIP = await _signaling.RegisterAsync(myId, RoomId, UdpPort);
+            Log(LogLevel.Ok, string.Concat("Registered through tunnel as '", myId, "'"));
+            Log(LogLevel.Ok, string.Concat("Assigned VPN IP: ", MyVirtualIP));
+        }
+        catch (Exception ex)
+        {
+            Log(LogLevel.Warn, string.Concat("Tunnel registration failed: ", ex.Message));
         }
     }
 
@@ -499,6 +583,8 @@ public class Engine : IEngine
         StunEndpoint = null;
         StunLink = null;
         PublicIP = null;
+        _vipCounter = 1;
+        _hostStunEndpoint = null;
 
         Log(LogLevel.Ok, "Shutdown complete");
     }

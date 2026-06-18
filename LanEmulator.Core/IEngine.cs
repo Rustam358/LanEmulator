@@ -32,6 +32,7 @@ public interface IEngine
     void Configure(int mode, string roomId, string? gamePath = null);
     Task ConnectAsync(string serverUrl);
     Task StartVpnAsync();
+    Task ConnectRemoteAsync();
     Task ShutdownAsync();
 
     // ── Goldberg ─────────────────────────────────────────────────────
