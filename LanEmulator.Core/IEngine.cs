@@ -27,7 +27,7 @@ public interface IEngine
     string JoinSetup(string? cliUrl = null);
     void Configure(int mode, string roomId, string? gamePath = null);
     Task ConnectAsync(string serverUrl);
-    void StartVpn();
+    Task StartVpnAsync();
     Task ShutdownAsync();
 
     // ── Goldberg ─────────────────────────────────────────────────────

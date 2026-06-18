@@ -279,11 +279,11 @@ public class Engine : IEngine
     }
 
     /// <summary>Phase 5: Create adapter, UDP, pumps, keepalive.</summary>
-    public void StartVpn()
+    public async Task StartVpnAsync()
     {
         OnStateChanged?.Invoke("vpn_starting", null);
 
-        _vpn.Start(AdapterName, MyVirtualIP, AdapterMask, PrefixLength, UdpPort, _peerReg);
+        await Task.Run(() => _vpn.Start(AdapterName, MyVirtualIP, AdapterMask, PrefixLength, UdpPort, _peerReg));
         Log(LogLevel.Ok, $"UDP socket: 0.0.0.0:{UdpPort}");
         Log(LogLevel.Ok, $"Hole punch -> {_peerReg.Count} peer(s)");
         Log(LogLevel.Ok, $"Adapter '{AdapterName}': {MyVirtualIP}/{PrefixLength}");

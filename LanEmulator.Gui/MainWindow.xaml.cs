@@ -20,6 +20,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _chatTimer = new() { Interval = TimeSpan.FromSeconds(2) };
     private int _lastChatId;
     private bool _isConnecting;
+    private bool _isShuttingDown;
 
     public MainWindow()
     {
@@ -160,7 +161,7 @@ public partial class MainWindow : Window
             _engine.Configure(1, _engine.RoomId, gamePath);
             await _engine.ConnectAsync(_engine.ServerUrl);
             await _engine.RunGoldbergAsync();
-            _engine.StartVpn();
+            await _engine.StartVpnAsync();
             _engine.LaunchGame();
 
             ShowLobby();
@@ -241,7 +242,7 @@ public partial class MainWindow : Window
 
             await _engine.ConnectAsync(serverUrl);
             await _engine.RunGoldbergAsync();
-            _engine.StartVpn();
+            await _engine.StartVpnAsync();
             _engine.LaunchGame();
 
             ShowLobby();
@@ -327,6 +328,7 @@ public partial class MainWindow : Window
             Margin = new Thickness(0, 1, 0, 1)
         };
         LstChat.Items.Add(item);
+        if (LstChat.Items.Count > 500) LstChat.Items.RemoveAt(0);
         LstChat.ScrollIntoView(LstChat.Items[^1]);
     }
 
@@ -367,10 +369,13 @@ public partial class MainWindow : Window
     }
     private async void Window_Closing(object? s, CancelEventArgs e)
     {
+        if (_isShuttingDown) return;
         if (_engine.IsRunning)
         {
             e.Cancel = true;
+            _isShuttingDown = true;
             await _engine.ShutdownAsync();
+            _isShuttingDown = false;
             Application.Current.Shutdown();
         }
     }
@@ -400,6 +405,7 @@ public partial class MainWindow : Window
             Margin = new Thickness(0, 1, 0, 1)
         };
         LstLog.Items.Add(item);
+        if (LstLog.Items.Count > 1000) LstLog.Items.RemoveAt(0);
         LstLog.ScrollIntoView(LstLog.Items[^1]);
     });
 
@@ -501,8 +507,8 @@ public partial class MainWindow : Window
             FontSize = 11,
             Margin = new Thickness(0, 1, 0, 1)
         };
-        try { LstWelcomeLog.Items.Add(item); LstWelcomeLog.ScrollIntoView(LstWelcomeLog.Items[^1]); } catch { }
-        try { LstLog.Items.Add(item); LstLog.ScrollIntoView(LstLog.Items[^1]); } catch { }
+        try { LstWelcomeLog.Items.Add(item); if (LstWelcomeLog.Items.Count > 1000) LstWelcomeLog.Items.RemoveAt(0); LstWelcomeLog.ScrollIntoView(LstWelcomeLog.Items[^1]); } catch { }
+        try { LstLog.Items.Add(item); if (LstLog.Items.Count > 1000) LstLog.Items.RemoveAt(0); LstLog.ScrollIntoView(LstLog.Items[^1]); } catch { }
     });
 }
 
