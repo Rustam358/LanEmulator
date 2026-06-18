@@ -21,7 +21,7 @@
         </Grid.RowDefinitions>
 
         <Grid Grid.Row="0" x:Name="TitleBar" Background="#181825" MouseLeftButtonDown="TitleBar_Drag">
-            <TextBlock Text="LanEmulator v1.2" Foreground="#6C7086" FontSize="12"
+            <TextBlock Text="LanEmulator v1.3" Foreground="#6C7086" FontSize="12"
                        VerticalAlignment="Center" Margin="14,0,0,0"/>
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                 <Button Content="─" Style="{StaticResource TitleButton}"
@@ -50,6 +50,16 @@
                     <TextBlock Text="Virtual LAN for Gaming" FontSize="20"
                                FontWeight="SemiBold" Foreground="#CDD6F4"
                                HorizontalAlignment="Center" Margin="0,0,0,24"/>
+
+
+                    <!-- Mode selector -->
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,16">
+                        <RadioButton x:Name="RbSteam" Content="Steam + Goldberg" Foreground="#CDD6F4"
+                                     FontSize="13" Margin="0,0,20,0" IsChecked="True"
+                                     GroupName="ModeGroup"/>
+                        <RadioButton x:Name="RbLan" Content="Pure LAN" Foreground="#CDD6F4"
+                                     FontSize="13" GroupName="ModeGroup"/>
+                    </StackPanel>
 
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
                         <!-- Host button -->
@@ -195,7 +205,7 @@
                                             Click="BtnLaunch_Click"
                                             Style="{StaticResource SmallButton}"
                                             Background="#A6E3A1" Foreground="#1E1E2E"
-                                            IsEnabled="False"/>
+                                            />
                                 </StackPanel>
                             </Grid>
                         </Border>
@@ -229,13 +239,13 @@
                                          Background="#1E1E2E" BorderBrush="#45475A"
                                          Foreground="#CDD6F4" CaretBrush="#CDD6F4"
                                          Padding="10,8" FontSize="13"
-                                         IsEnabled="False"/>
+                                         />
                                 <Button Content="Send" Grid.Column="1"
                                         Width="60" Margin="8,0,0,0"
                                         Click="BtnSendChat_Click"
                                         Background="#89B4FA" Foreground="#1E1E2E"
                                         FontWeight="SemiBold" FontSize="12"
-                                        IsEnabled="False" x:Name="BtnSendChat"/>
+                                        x:Name="BtnSendChat"/>
                             </Grid>
                         </Grid>
                     </Border>

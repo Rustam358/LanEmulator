@@ -158,7 +158,8 @@ public partial class MainWindow : Window
             WireEngine();
 
             // Connect + VPN — lobby shown only after success
-            _engine.Configure(1, _engine.RoomId, gamePath);
+            int mode = RbSteam.IsChecked == true ? 1 : 2;
+            _engine.Configure(mode, _engine.RoomId, gamePath);
             await _engine.ConnectAsync(_engine.ServerUrl);
             await _engine.RunGoldbergAsync();
             await _engine.StartVpnAsync();
@@ -237,7 +238,8 @@ public partial class MainWindow : Window
             // Game selection
             string? gamePath = await PickGameAsync();
 
-            _engine.Configure(1, roomDlg.Answer, gamePath);
+            int mode = RbSteam.IsChecked == true ? 1 : 2;
+            _engine.Configure(mode, roomDlg.Answer, gamePath);
             WireEngine();
 
             await _engine.ConnectAsync(serverUrl);
