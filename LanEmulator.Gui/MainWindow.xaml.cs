@@ -429,17 +429,11 @@ public partial class MainWindow : Window
 
     private void AppendChat(string player, string text, string time)
     {
-        var item = new TextBlock
-        {
-            Text = $"[{time}] {player}: {text}",
-            Foreground = new SolidColorBrush(Color.FromRgb(0xCD, 0xD6, 0xF4)),
-            FontSize = 12,
-            TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(0, 1, 0, 1)
-        };
-        LstChat.Items.Add(item);
-        if (LstChat.Items.Count > 500) LstChat.Items.RemoveAt(0);
-        LstChat.ScrollIntoView(LstChat.Items[^1]);
+        LstChat.AppendText(string.Concat("[", time, "] ", player, ": ", text, Environment.NewLine));
+        if (LstChat.LineCount > 500)
+            LstChat.Text = string.Join(Environment.NewLine,
+                LstChat.Text.Split(Environment.NewLine).Skip(LstChat.LineCount - 500));
+        LstChat.ScrollToEnd();
     }
 
     private async void TxtChatInput_KeyDown(object s, KeyEventArgs e)
@@ -472,8 +466,8 @@ public partial class MainWindow : Window
         ShowWelcome();
         ResetWelcomeButtons();
         LstPlayers.Items.Clear();
-        LstChat.Items.Clear();
-        LstLog.Items.Clear();
+        LstChat.Text = "";
+        LstLog.Text = "";
         TxtDiscovery.Text = "🔍  Scanning LAN for servers…";
         _ = DiscoverLanServersAsync();
     }
@@ -502,27 +496,11 @@ public partial class MainWindow : Window
             _diagWarnings.Add(e.Message);
             if (_diagWarnings.Count > 100) _diagWarnings.RemoveAt(0);
         }
-        var brush = e.Level switch
-        {
-            LogLevel.Error => new SolidColorBrush(Color.FromRgb(0xF3, 0x8B, 0xA8)),
-            LogLevel.Warn => new SolidColorBrush(Color.FromRgb(0xF9, 0xE2, 0xAF)),
-            LogLevel.Ok => new SolidColorBrush(Color.FromRgb(0xA6, 0xE3, 0xA1)),
-            LogLevel.Info => new SolidColorBrush(Color.FromRgb(0x89, 0xB4, 0xFA)),
-            LogLevel.PeerJoin => new SolidColorBrush(Color.FromRgb(0xA6, 0xE3, 0xA1)),
-            LogLevel.PeerLeft => new SolidColorBrush(Color.FromRgb(0xF3, 0x8B, 0xA8)),
-            _ => new SolidColorBrush(Color.FromRgb(0xCD, 0xD6, 0xF4))
-        };
-        var item = new TextBlock
-        {
-            Text = $"{e.Time:HH:mm:ss}  {e.Message}",
-            Foreground = brush,
-            FontFamily = new FontFamily("Consolas"),
-            FontSize = 11,
-            Margin = new Thickness(0, 1, 0, 1)
-        };
-        LstLog.Items.Add(item);
-        if (LstLog.Items.Count > 1000) LstLog.Items.RemoveAt(0);
-        LstLog.ScrollIntoView(LstLog.Items[^1]);
+        LstLog.AppendText(string.Concat(e.Time.ToString("HH:mm:ss"), "  ", e.Message, Environment.NewLine));
+        if (LstLog.LineCount > 1000)
+            LstLog.Text = string.Join(Environment.NewLine,
+                LstLog.Text.Split(Environment.NewLine).Skip(LstLog.LineCount - 1000));
+        LstLog.ScrollToEnd();
     });
 
     private void OnStateChanged(string state, string? detail)
@@ -607,24 +585,9 @@ public partial class MainWindow : Window
     /// <summary>Log a message before engine starts (visible on welcome page).</summary>
     private void LogStatic(LogLevel level, string msg) => Dispatcher.Invoke(() =>
     {
-        var brush = level switch
-        {
-            LogLevel.Error => new SolidColorBrush(Color.FromRgb(0xF3, 0x8B, 0xA8)),
-            LogLevel.Warn => new SolidColorBrush(Color.FromRgb(0xF9, 0xE2, 0xAF)),
-            LogLevel.Ok => new SolidColorBrush(Color.FromRgb(0xA6, 0xE3, 0xA1)),
-            LogLevel.Info => new SolidColorBrush(Color.FromRgb(0x89, 0xB4, 0xFA)),
-            _ => new SolidColorBrush(Color.FromRgb(0xCD, 0xD6, 0xF4))
-        };
-        var item = new TextBlock
-        {
-            Text = $"{DateTime.Now:HH:mm:ss}  {msg}",
-            Foreground = brush,
-            FontFamily = new FontFamily("Consolas"),
-            FontSize = 11,
-            Margin = new Thickness(0, 1, 0, 1)
-        };
-        try { LstWelcomeLog.Items.Add(item); if (LstWelcomeLog.Items.Count > 1000) LstWelcomeLog.Items.RemoveAt(0); LstWelcomeLog.ScrollIntoView(LstWelcomeLog.Items[^1]); } catch { }
-        try { LstLog.Items.Add(item); if (LstLog.Items.Count > 1000) LstLog.Items.RemoveAt(0); LstLog.ScrollIntoView(LstLog.Items[^1]); } catch { }
+        string line = string.Concat(DateTime.Now.ToString("HH:mm:ss"), "  ", msg, Environment.NewLine);
+        try { LstWelcomeLog.AppendText(line); if (LstWelcomeLog.LineCount > 1000) LstWelcomeLog.Text = string.Join(Environment.NewLine, LstWelcomeLog.Text.Split(Environment.NewLine).Skip(LstWelcomeLog.LineCount - 1000)); LstWelcomeLog.ScrollToEnd(); } catch { }
+        try { LstLog.AppendText(line); if (LstLog.LineCount > 1000) LstLog.Text = string.Join(Environment.NewLine, LstLog.Text.Split(Environment.NewLine).Skip(LstLog.LineCount - 1000)); LstLog.ScrollToEnd(); } catch { }
     });
 }
 

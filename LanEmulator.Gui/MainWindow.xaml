@@ -114,10 +114,12 @@
                 </StackPanel>
 
                 <!-- Welcome page log (errors visible before entering lobby) -->
-                <ListBox x:Name="LstWelcomeLog" Grid.Row="1"
+                <TextBox x:Name="LstWelcomeLog" Grid.Row="1"
+                         IsReadOnly="True" IsReadOnlyCaretVisible="True"
                          Background="#181825" BorderThickness="0"
                          Foreground="#CDD6F4" FontFamily="Consolas" FontSize="11"
-                         Margin="24,0,24,0"/>
+                         VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                         TextWrapping="NoWrap" Margin="24,0,24,0"/>
 
                 <!-- Bottom bar -->
                 <Border Grid.Row="2" Background="#181825" Padding="12,8"
@@ -152,11 +154,11 @@
                                        Foreground="#A6E3A1" FontWeight="SemiBold"
                                        FontSize="13" VerticalAlignment="Center"/>
                             <TextBlock Text=" · " Foreground="#45475A" VerticalAlignment="Center"/>
-                            <TextBlock x:Name="TxtLobbyRoom" Text="Room: ----"
+                            <TextBox x:Name="TxtLobbyRoom" IsReadOnly="True" IsReadOnlyCaretVisible="True" BorderThickness="0" Background="Transparent" Text="Room: ----"
                                        Foreground="#89B4FA" FontSize="13"
                                        VerticalAlignment="Center"/>
                             <TextBlock Text=" · " Foreground="#45475A" VerticalAlignment="Center"/>
-                            <TextBlock x:Name="TxtLobbyIp" Text="10.13.37.1"
+                            <TextBox x:Name="TxtLobbyIp" IsReadOnly="True" IsReadOnlyCaretVisible="True" BorderThickness="0" Background="Transparent" Text="10.13.37.1"
                                        Foreground="#A6E3A1" FontFamily="Consolas" FontSize="12"
                                        VerticalAlignment="Center"/>
                         </StackPanel>
@@ -240,11 +242,12 @@
                             <TextBlock Grid.Row="0" Text="CHAT" Foreground="#6C7086"
                                        FontSize="11" FontWeight="Bold" Margin="0,0,0,10"/>
 
-                            <ListBox x:Name="LstChat" Grid.Row="1"
+                            <TextBox x:Name="LstChat" Grid.Row="1"
+                                     IsReadOnly="True" IsReadOnlyCaretVisible="True"
                                      Background="Transparent" BorderThickness="0"
                                      Foreground="#CDD6F4" FontSize="12"
-                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                                     Margin="0,0,0,10"/>
+                                     VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                                     TextWrapping="Wrap" Margin="0,0,0,10"/>
 
                             <Grid Grid.Row="2">
                                 <Grid.ColumnDefinitions>
@@ -278,9 +281,12 @@
                         </Grid.RowDefinitions>
                         <TextBlock Text="LOG" Foreground="#6C7086" FontSize="10"
                                    FontWeight="Bold" Margin="0,0,0,4"/>
-                        <ListBox x:Name="LstLog" Grid.Row="1"
+                        <TextBox x:Name="LstLog" Grid.Row="1"
+                                 IsReadOnly="True" IsReadOnlyCaretVisible="True"
                                  Background="Transparent" BorderThickness="0"
-                                 Foreground="#CDD6F4" FontFamily="Consolas" FontSize="11"/>
+                                 Foreground="#CDD6F4" FontFamily="Consolas" FontSize="11"
+                                 VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                                 TextWrapping="NoWrap"/>
                     </Grid>
                 </Border>
             </Grid>
