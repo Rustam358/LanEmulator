@@ -311,12 +311,10 @@ public class Engine : IEngine
         if (GamePath == null) return;
         try
         {
-            // Launch via explorer.exe — identical to double-click, handles WOW64 correctly
-            GameProcess = Process.Start(new ProcessStartInfo
+            GameProcess = Process.Start(new ProcessStartInfo(GamePath!)
             {
-                FileName = "explorer.exe",
-                Arguments = string.Concat('"', GamePath!, '"'),
-                UseShellExecute = false
+                WorkingDirectory = GameDir,
+                UseShellExecute = true
             });
             Log(LogLevel.Ok, string.Concat("Game launched (PID ", GameProcess?.Id, ")"));
         }
