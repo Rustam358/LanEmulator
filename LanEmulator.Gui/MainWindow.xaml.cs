@@ -21,6 +21,7 @@ public partial class MainWindow : Window
     private int _lastChatId;
     private bool _isConnecting;
     private bool _isShuttingDown;
+    private readonly List<string> _diagWarnings = new();
 
     public MainWindow()
     {
@@ -92,8 +93,29 @@ public partial class MainWindow : Window
     // Page navigation
     // ════════════════════════════════════════════════════════
 
-    private void ShowWelcome() { WelcomePage.Visibility = Visibility.Visible; LobbyPage.Visibility = Visibility.Collapsed; }
-    private void ShowLobby() { WelcomePage.Visibility = Visibility.Collapsed; LobbyPage.Visibility = Visibility.Visible; }
+    private void ShowWelcome()
+    {
+        WelcomePage.Visibility = Visibility.Visible;
+        LobbyPage.Visibility = Visibility.Collapsed;
+        DiagnosticsPage.Visibility = Visibility.Collapsed;
+        TabHome.Content = "Home";
+        TabHome.Background = new SolidColorBrush(Color.FromRgb(0x31, 0x32, 0x44));
+        TabHome.Foreground = new SolidColorBrush(Color.FromRgb(0xCD, 0xD6, 0xF4));
+        TabDiagnostics.Background = Brushes.Transparent;
+        TabDiagnostics.Foreground = new SolidColorBrush(Color.FromRgb(0x6C, 0x70, 0x86));
+    }
+
+    private void ShowLobby()
+    {
+        WelcomePage.Visibility = Visibility.Collapsed;
+        LobbyPage.Visibility = Visibility.Visible;
+        DiagnosticsPage.Visibility = Visibility.Collapsed;
+        TabHome.Content = "Lobby";
+        TabHome.Background = new SolidColorBrush(Color.FromRgb(0x31, 0x32, 0x44));
+        TabHome.Foreground = new SolidColorBrush(Color.FromRgb(0xCD, 0xD6, 0xF4));
+        TabDiagnostics.Background = Brushes.Transparent;
+        TabDiagnostics.Foreground = new SolidColorBrush(Color.FromRgb(0x6C, 0x70, 0x86));
+    }
 
     // ════════════════════════════════════════════════════════
     // LAN discovery
@@ -111,6 +133,92 @@ public partial class MainWindow : Window
             }
         }
         catch { }
+    }
+
+    // ════════════════════════════════════════════════════════
+    // Tab switching
+    // ════════════════════════════════════════════════════════
+
+    private void TabHome_Click(object s, RoutedEventArgs e)
+    {
+        if (_engine.IsRunning) ShowLobby(); else ShowWelcome();
+    }
+
+    private void TabDiagnostics_Click(object s, RoutedEventArgs e)
+    {
+        WelcomePage.Visibility = Visibility.Collapsed;
+        LobbyPage.Visibility = Visibility.Collapsed;
+        DiagnosticsPage.Visibility = Visibility.Visible;
+        TabDiagnostics.Background = new SolidColorBrush(Color.FromRgb(0x31, 0x32, 0x44));
+        TabDiagnostics.Foreground = new SolidColorBrush(Color.FromRgb(0xCD, 0xD6, 0xF4));
+        TabHome.Background = Brushes.Transparent;
+        TabHome.Foreground = new SolidColorBrush(Color.FromRgb(0x6C, 0x70, 0x86));
+        RefreshDiagnostics();
+    }
+
+    private void BtnDiagRefresh_Click(object s, RoutedEventArgs e) => RefreshDiagnostics();
+
+    private void RefreshDiagnostics()
+    {
+        // Game info
+        if (!string.IsNullOrEmpty(_engine.GamePath))
+            DiagGamePath.Text = _engine.GamePath;
+        else if (!string.IsNullOrEmpty(TxtSelectedGame.Text))
+            DiagGamePath.Text = TxtSelectedGame.Text;
+        else
+            DiagGamePath.Text = "No game selected";
+
+        DiagWarnings.Items.Clear();
+        foreach (var w in _diagWarnings)
+            DiagWarnings.Items.Add(new TextBlock
+            {
+                Text = w,
+                Foreground = new SolidColorBrush(Color.FromRgb(0xF9, 0xE2, 0xAF)),
+                FontFamily = new FontFamily("Consolas"),
+                FontSize = 11
+            });
+
+        // Network info
+        try
+        {
+            var adapters = System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces();
+            var tun = adapters.FirstOrDefault(a => a.Name.Contains("LanEmulator"));
+            if (tun != null)
+                DiagAdapter.Text = string.Concat("Adapter: ", tun.Name, " (", tun.OperationalStatus, ")");
+            else
+                DiagAdapter.Text = "Adapter: not found";
+        }
+        catch { DiagAdapter.Text = "Adapter: error querying"; }
+
+        uint ver = Engine.GetDriverVersion();
+        DiagDrvVer.Text = ver == 0 ? "Wintun driver: not installed"
+            : string.Concat("Wintun driver: v", (ver >> 16).ToString(), ".", (ver & 0xFFFF).ToString());
+
+        if (_engine.IsRunning && !string.IsNullOrEmpty(_engine.MyVirtualIP))
+            DiagIp.Text = string.Concat("Virtual IP: ", _engine.MyVirtualIP);
+        else
+            DiagIp.Text = "Virtual IP: not assigned";
+
+        try
+        {
+            // Check adapter and routes via system APIs (no deadlock risk)
+            var adapters = System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces();
+            var tunRoutes = adapters
+                .Where(a => a.Name.Contains("LanEmulator"))
+                .Select(a => string.Concat(a.Name, " / ", a.GetIPProperties().UnicastAddresses
+                    .FirstOrDefault()?.Address.ToString() ?? "no IP"))
+                .ToList();
+            DiagRoutes.Text = tunRoutes.Count > 0
+                ? string.Concat("Virtual adapter: ", tunRoutes[0])
+                : "Virtual adapter: not found";
+        }
+        catch { DiagRoutes.Text = "Adapter: error querying"; }
+        // Room info
+        DiagRoomId.Text = string.IsNullOrEmpty(_engine.RoomId)
+            ? "Room: not connected" : string.Concat("Room: ", _engine.RoomId);
+        DiagPeers.Text = _engine.IsRunning
+            ? string.Concat("Peers: ", _engine.PeerCount.ToString())
+            : "Peers: not connected";
     }
 
     // ════════════════════════════════════════════════════════
@@ -388,6 +496,12 @@ public partial class MainWindow : Window
 
     private void OnEngineLog(LogEntry e) => Dispatcher.Invoke(() =>
     {
+        // Capture warnings for diagnostics tab
+        if (e.Level == LogLevel.Warn)
+        {
+            _diagWarnings.Add(e.Message);
+            if (_diagWarnings.Count > 100) _diagWarnings.RemoveAt(0);
+        }
         var brush = e.Level switch
         {
             LogLevel.Error => new SolidColorBrush(Color.FromRgb(0xF3, 0x8B, 0xA8)),
