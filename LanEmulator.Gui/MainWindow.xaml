@@ -21,7 +21,7 @@
         </Grid.RowDefinitions>
 
         <Grid Grid.Row="0" x:Name="TitleBar" Background="#181825" MouseLeftButtonDown="TitleBar_Drag">
-            <TextBlock Text="LanEmulator v1.3.1" Foreground="#6C7086" FontSize="12"
+            <TextBlock Text="LanEmulator v1.3.2" Foreground="#6C7086" FontSize="12"
                        VerticalAlignment="Center" Margin="14,0,0,0"/>
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                 <Button Content="─" Style="{StaticResource TitleButton}"
