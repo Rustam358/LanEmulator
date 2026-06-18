@@ -11,14 +11,15 @@ public interface IEngine
     event StateHandler OnStateChanged;
     event PeerHandler OnPeerJoined;
     event PeerHandler OnPeerLeft;
-    event ChatHandler OnChatReceived;
+    event Action<string> OnRoomCreated;
 
     // ── Properties ───────────────────────────────────────────────────
     string RoomId { get; }
     string ServerUrl { get; }
-    System.Net.IPAddress? MyVirtualIP { get; }
+    string MyVirtualIP { get; }
     bool IsHost { get; }
-    int PlayerCount { get; }
+    int PeerCount { get; }
+    bool IsRunning { get; }
     string? GamePath { get; }
 
     // ── Lifecycle ────────────────────────────────────────────────────

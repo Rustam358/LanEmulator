@@ -17,10 +17,6 @@ namespace LanEmulator.Core;
 
 
 
-public delegate void LogHandler(LogEntry entry);
-public delegate void StateHandler(string state, string? detail);
-public delegate void PeerHandler(PlayerInfo peer);
-public delegate void ChatHandler(string player, string text, string timestamp);
 
 /// <summary>
 /// Central engine for the Wintun LAN Emulator.
@@ -28,10 +24,10 @@ public delegate void ChatHandler(string player, string text, string timestamp);
 /// </summary>
 public class Engine : IEngine
 {
-    public event LogHandler? OnLog;
-    public event StateHandler? OnStateChanged;
-    public event PeerHandler? OnPeerJoined;
-    public event PeerHandler? OnPeerLeft;
+    public event LogHandler OnLog;
+    public event StateHandler OnStateChanged;
+    public event PeerHandler OnPeerJoined;
+    public event PeerHandler OnPeerLeft;
     public event Action<string>? OnRoomCreated;
 
     public string RoomId { get; private set; } = "";
@@ -78,8 +74,7 @@ public class Engine : IEngine
     // Public API
     // ════════════════════════════════════════════════════════
 
-    /// <summary>True if current process has admin rights.</summary>/// <summary>Check if running with Administrator privileges.</summary>
-    /// <summary>True if current process has admin rights.</summary>
+    /// <summary>Check if running with Administrator privileges.</summary>
     public static bool IsAdministrator()
     {
         using var id = WindowsIdentity.GetCurrent();
@@ -89,8 +84,7 @@ public class Engine : IEngine
     /// <summary>Check Wintun driver version. 0 = not installed.</summary>
     public static uint GetDriverVersion() => WintunInterop.WintunGetRunningDriverVersion();
 
-    /// <summary>Generate a readable 6-char Room ID.</summary>/// <summary>Generate a random 6-character alphanumeric room ID.</summary>
-    /// <summary>Generate a readable 6-char Room ID.</summary>
+    /// <summary>Generate a random 6-character alphanumeric room ID.</summary>
     public static string GenerateRoomId()
     {
         const string chars = "abcdefghjkmnpqrstuvwxyz23456789";
@@ -98,8 +92,7 @@ public class Engine : IEngine
         return new string(Enumerable.Range(0, 6).Select(_ => chars[rng.Next(chars.Length)]).ToArray());
     }
 
-    /// <summary>Auto-detect local LAN IPv4 address.</summary>/// <summary>Get the best local IPv4 address for LAN communication.</summary>
-    /// <summary>Auto-detect local LAN IPv4 address.</summary>
+    /// <summary>Get the best local IPv4 address for LAN communication.</summary>
     public static string GetLocalIP()
     {
         foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
@@ -116,7 +109,6 @@ public class Engine : IEngine
     // Setup phases (called sequentially by GUI)
     // ════════════════════════════════════════════════════════
 
-    /// <summary>Phase 1: Start built-in C# HTTP server (host only). No Python required.</summary>/// <summary>Start built-in HTTP signaling server and open firewall rules.</summary>
     /// <summary>Phase 1: Start built-in C# HTTP server (host only). No Python required.</summary>
     public Task HostSetupAsync()
     {
@@ -150,8 +142,7 @@ public class Engine : IEngine
         return Task.CompletedTask;
     }
 
-    /// <summary>Phase 1b: Join -- discover or enter server URL.</summary>/// <summary>Discover LAN servers via UDP broadcast, or accept CLI-provided URL.</summary>
-    /// <summary>Phase 1b: Join -- discover or enter server URL.</summary>
+    /// <summary>Discover LAN servers via UDP broadcast, or accept CLI-provided URL.</summary>
     public string JoinSetup(string? cliUrl = null)
     {
         IsHost = false;
@@ -170,8 +161,7 @@ public class Engine : IEngine
         return ""; // GUI will prompt user
     }
 
-    /// <summary>Phase 2: Set mode, room, game path.</summary>/// <summary>Set game mode (Steam+Goldberg / Pure LAN), room ID, and optional game path.</summary>
-    /// <summary>Phase 2: Set mode, room, game path.</summary>
+    /// <summary>Set game mode (Steam+Goldberg / Pure LAN), room ID, and optional game path.</summary>
     public void Configure(int mode, string roomId, string? gamePath = null)
     {
         Mode = mode;
@@ -185,8 +175,7 @@ public class Engine : IEngine
         Log(LogLevel.Ok, $"Mode: {(mode == 1 ? "Steam + Goldberg" : "Pure LAN")}");
     }
 
-    /// <summary>Phase 3: Connect to server, register, poll peers, set up VPN.</summary>/// <summary>Connect to signaling server, register, poll for peers, set up VPN routing.</summary>
-    /// <summary>Phase 3: Connect to server, register, poll peers, set up VPN.</summary>
+    /// <summary>Connect to signaling server, register, poll for peers, set up VPN routing.</summary>
     public async Task ConnectAsync(string serverUrl)
     {
         ServerUrl = serverUrl.TrimEnd('/');
@@ -322,8 +311,7 @@ public class Engine : IEngine
         Log(LogLevel.Ok, "steam_settings/ deployed");
     }
 
-    /// <summary>Phase 5: Create adapter, UDP, pumps, keepalive.</summary>/// <summary>Create UDP socket, hole-punch peers, initialize Wintun adapter, start packet pumps.</summary>
-    /// <summary>Phase 5: Create adapter, UDP, pumps, keepalive.</summary>
+    /// <summary>Create UDP socket, hole-punch peers, initialize Wintun adapter, start packet pumps.</summary>
     public void StartVpn()
     {
         OnStateChanged?.Invoke("vpn_starting", null);
@@ -407,7 +395,6 @@ public class Engine : IEngine
         GameDir = Path.GetDirectoryName(GamePath);
     }
 
-    /// <summary>Launch the game executable (Steam mode only).</summary>/// <summary>Launch the configured game executable.</summary>
     /// <summary>Launch the game executable (Steam mode only).</summary>
     public void LaunchGame()
     {
@@ -420,8 +407,7 @@ public class Engine : IEngine
         catch (Exception ex) { Log(LogLevel.Warn, $"Game launch failed: {ex.Message}"); }
     }
 
-    /// <summary>Subscribe to chat messages from the server.</summary>/// <summary>Poll server for new chat messages since lastId.</summary>
-    /// <summary>Subscribe to chat messages from the server.</summary>
+    /// <summary>Poll server for new chat messages since lastId.</summary>
     public async Task<List<ChatMessage>> PollChatAsync(int lastId)
     {
         if (_http == null) return new();
@@ -434,8 +420,7 @@ public class Engine : IEngine
         catch (Exception ex) { Log(LogLevel.Warn, $"Chat poll: {ex.Message}"); return new(); }
     }
 
-    /// <summary>Send a chat message. Returns server-assigned message id, or -1.</summary>/// <summary>Send a chat message to all peers in the room. Returns server-assigned message ID.</summary>
-    /// <summary>Send a chat message. Returns server-assigned message id, or -1.</summary>
+    /// <summary>Send a chat message to all peers in the room. Returns server-assigned message ID.</summary>
     public async Task<int> SendChatAsync(string text)
     {
         if (_http == null) return -1;
@@ -453,8 +438,7 @@ public class Engine : IEngine
         return -1;
     }
 
-    /// <summary>Shutdown everything gracefully.</summary>/// <summary>Gracefully stop VPN, kill game process, clean up all resources.</summary>
-    /// <summary>Shutdown everything gracefully.</summary>
+    /// <summary>Gracefully stop VPN, kill game process, clean up all resources.</summary>
     public async Task ShutdownAsync()
     {
         IsRunning = false;
