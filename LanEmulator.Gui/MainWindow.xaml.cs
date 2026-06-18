@@ -8,6 +8,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
+using System.Runtime.InteropServices;
 using System.Windows.Threading;
 using Microsoft.Win32;
 using LanEmulator.Core;
@@ -158,60 +159,80 @@ public partial class MainWindow : Window
 
     private void BtnDiagRefresh_Click(object s, RoutedEventArgs e) => RefreshDiagnostics();
 
+    /// <summary>Populate all diagnostics fields with current state.</summary>
     private void RefreshDiagnostics()
     {
-        // Game info
-        if (!string.IsNullOrEmpty(_engine.GamePath))
-            DiagGamePath.Text = _engine.GamePath;
-        else if (!string.IsNullOrEmpty(TxtSelectedGame.Text))
-            DiagGamePath.Text = TxtSelectedGame.Text;
-        else
-            DiagGamePath.Text = "No game selected";
-
-        DiagWarnings.Text = _diagWarnings.Count == 0
-            ? "" : string.Join(Environment.NewLine, _diagWarnings);
-
-        // Network info
         try
         {
-            var adapters = System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces();
-            var tun = adapters.FirstOrDefault(a => a.Name.Contains("LanEmulator"));
-            if (tun != null)
-                DiagAdapter.Text = string.Concat("Adapter: ", tun.Name, " (", tun.OperationalStatus, ")");
+            // Game info
+            string gamePath = null;
+            if (!string.IsNullOrEmpty(_engine.GamePath))
+                gamePath = _engine.GamePath;
             else
-                DiagAdapter.Text = "Adapter: not found";
+                try { gamePath = TxtSelectedGame.Text; } catch { }
+
+            DiagGamePath.Text = string.IsNullOrEmpty(gamePath)
+                ? "No game selected" : gamePath;
+
+            // Warnings
+            // Combine game validation warnings + game events
+            var allWarnings = new List<string>(_diagWarnings);
+            allWarnings.AddRange(_gameEvents);
+            DiagWarnings.Text = allWarnings.Count == 0 ? ""
+                : string.Join(Environment.NewLine, _diagWarnings);
+
+            // Network info
+            var nics = System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces();
+            var tun = nics.FirstOrDefault(a => a.Name.Contains("LanEmulator"));
+            if (tun != null)
+            {
+                DiagAdapter.Text = string.Concat("Adapter: ", tun.Name, " (", tun.OperationalStatus, ")");
+                var ip = tun.GetIPProperties().UnicastAddresses
+                    .FirstOrDefault(ua => ua.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork);
+                DiagIp.Text = ip != null
+                    ? string.Concat("Virtual IP: ", ip.Address, "/", ip.PrefixLength)
+                    : "Virtual IP: not assigned";
+                DiagRoutes.Text = string.Concat("Routes: 10.13.37.0/24 via ", tun.Name,
+                    " (", (tun.OperationalStatus == System.Net.NetworkInformation.OperationalStatus.Up ? "UP" : "DOWN"), ")");
+            }
+            else
+            {
+                DiagAdapter.Text = "Adapter: not found (not connected)";
+                DiagIp.Text = "Virtual IP: --";
+                DiagRoutes.Text = "Routes: adapter offline";
+            }
+
+            uint ver = Engine.GetDriverVersion();
+            DiagDrvVer.Text = ver == 0
+                ? "Wintun driver: not installed"
+                : string.Concat("Wintun driver: v", ver >> 16, ".", ver & 0xFFFF);
+
+            // Room info
+            DiagRoomId.Text = string.IsNullOrEmpty(_engine.RoomId)
+                ? "Room: not connected" : string.Concat("Room: ", _engine.RoomId);
+            DiagPeers.Text = _engine.IsRunning
+                ? string.Concat("Peers: ", _engine.PeerCount.ToString(), " (you + remote)")
+                : "Peers: not connected";
+
+            // Game process status
+            if (_engine.GameProcess != null)
+            {
+                try
+                {
+                    if (_engine.GameProcess.HasExited)
+                        DiagGamePath.Text = string.Concat(DiagGamePath.Text,
+                            " [EXITED, code=", _engine.GameProcess.ExitCode, "]");
+                    else
+                        DiagGamePath.Text = string.Concat(DiagGamePath.Text,
+                            " [RUNNING, PID=", _engine.GameProcess.Id, "]");
+                }
+                catch { DiagGamePath.Text = string.Concat(DiagGamePath.Text, " [detached]"); }
+            }
         }
-        catch { DiagAdapter.Text = "Adapter: error querying"; }
-
-        uint ver = Engine.GetDriverVersion();
-        DiagDrvVer.Text = ver == 0 ? "Wintun driver: not installed"
-            : string.Concat("Wintun driver: v", (ver >> 16).ToString(), ".", (ver & 0xFFFF).ToString());
-
-        if (_engine.IsRunning && !string.IsNullOrEmpty(_engine.MyVirtualIP))
-            DiagIp.Text = string.Concat("Virtual IP: ", _engine.MyVirtualIP);
-        else
-            DiagIp.Text = "Virtual IP: not assigned";
-
-        try
+        catch (Exception ex)
         {
-            // Check adapter and routes via system APIs (no deadlock risk)
-            var adapters = System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces();
-            var tunRoutes = adapters
-                .Where(a => a.Name.Contains("LanEmulator"))
-                .Select(a => string.Concat(a.Name, " / ", a.GetIPProperties().UnicastAddresses
-                    .FirstOrDefault()?.Address.ToString() ?? "no IP"))
-                .ToList();
-            DiagRoutes.Text = tunRoutes.Count > 0
-                ? string.Concat("Virtual adapter: ", tunRoutes[0])
-                : "Virtual adapter: not found";
+            DiagAdapter.Text = string.Concat("Diagnostics error: ", ex.Message);
         }
-        catch { DiagRoutes.Text = "Adapter: error querying"; }
-        // Room info
-        DiagRoomId.Text = string.IsNullOrEmpty(_engine.RoomId)
-            ? "Room: not connected" : string.Concat("Room: ", _engine.RoomId);
-        DiagPeers.Text = _engine.IsRunning
-            ? string.Concat("Peers: ", _engine.PeerCount.ToString())
-            : "Peers: not connected";
     }
 
     // ════════════════════════════════════════════════════════
@@ -399,7 +420,117 @@ public partial class MainWindow : Window
         if (path != null) _engine.SetGamePath(path);
     }
 
-    private void BtnLaunch_Click(object s, RoutedEventArgs e) => _engine.LaunchGame();
+    private readonly DispatcherTimer _gameWatchdog = new() { Interval = TimeSpan.FromSeconds(3) };
+    private readonly List<string> _gameEvents = new();
+
+    private void BtnLaunch_Click(object s, RoutedEventArgs e)
+    {
+        _engine.LaunchGame();
+        StartGameWatchdog();
+    }
+
+    private void StartGameWatchdog()
+    {
+        _gameWatchdog.Tick -= GameWatchdog_Tick;
+        _gameWatchdog.Tick += GameWatchdog_Tick;
+        _gameWatchdog.Start();
+    }
+
+    private void GameWatchdog_Tick(object? s, EventArgs e)
+    {
+        if (_engine.GameProcess == null) { _gameWatchdog.Stop(); return; }
+        try
+        {
+            if (_engine.GameProcess.HasExited)
+            {
+                _gameWatchdog.Stop();
+                int code = _engine.GameProcess.ExitCode;
+                _gameEvents.Add(string.Concat(
+                    DateTime.Now.ToString("HH:mm:ss"),
+                    " Game process exited with code ", code.ToString()));
+
+                // Scan for error dialogs from the game
+                _ = Task.Run(() =>
+                {
+                    Thread.Sleep(500); // let dialog appear
+                    var dialogs = ScanErrorDialogs();
+                    if (dialogs.Count > 0)
+                    {
+                        foreach (var dlg in dialogs)
+                            _gameEvents.Add(string.Concat(
+                                "[ERROR DIALOG] ", dlg));
+                    }
+                    if (code != 0 && dialogs.Count == 0)
+                        _gameEvents.Add("Check the Diagnostics tab for known issue descriptions.");
+
+                    Dispatcher.Invoke(() => RefreshDiagnostics());
+                });
+            }
+        }
+        catch { _gameWatchdog.Stop(); }
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+    private static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount);
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool IsWindowVisible(IntPtr hWnd);
+
+    private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+    private List<string> ScanErrorDialogs()
+    {
+        var results = new List<string>();
+        try
+        {
+            int targetPid;
+            try { targetPid = _engine.GameProcess?.Id ?? 0; }
+            catch { return results; }
+            if (targetPid == 0) return results;
+
+            // Common error dialog window class names
+            var errorClasses = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "#32770", // standard Windows dialog
+                "Static", "MozillaDialogClass", "MessageBoxWindowClass",
+                "TXGuiFoundation", "wxWindowClassNR"
+            };
+
+            EnumWindows((hWnd, lParam) =>
+            {
+                GetWindowThreadProcessId(hWnd, out uint pid);
+                if (pid == (uint)targetPid || true) // check ALL visible dialogs
+                {
+                    var sb = new System.Text.StringBuilder(1024);
+                    int len = GetWindowText(hWnd, sb, 1024);
+                    if (len > 2 && IsWindowVisible(hWnd))
+                    {
+                        // Filter: capture error-like windows, skip game window itself
+                        string title = sb.ToString();
+                        if (title.Contains("Error", StringComparison.OrdinalIgnoreCase) ||
+                            title.Contains("Error", StringComparison.OrdinalIgnoreCase) ||
+                            title.Contains("Fatal", StringComparison.OrdinalIgnoreCase) ||
+                            title.Contains("Exception", StringComparison.OrdinalIgnoreCase) ||
+                            title.Contains("0xc0", StringComparison.OrdinalIgnoreCase) ||
+                            title.Contains("Bad Image", StringComparison.OrdinalIgnoreCase) ||
+                            title.Contains("Missing", StringComparison.OrdinalIgnoreCase) ||
+                            title.Contains("not found", StringComparison.OrdinalIgnoreCase) ||
+                            title.Contains(".dll", StringComparison.OrdinalIgnoreCase) &&
+                            title.Length < 200)
+                        {
+                            results.Add(title);
+                        }
+                    }
+                }
+                return true;
+            }, IntPtr.Zero);
+        }
+        catch { }
+        return results.Distinct().ToList();
+    }
 
     // ════════════════════════════════════════════════════════
     // Chat
@@ -462,6 +593,8 @@ public partial class MainWindow : Window
         LstChat.Text = "";
         LstLog.Document.Blocks.Clear();
         LstWelcomeLog.Document.Blocks.Clear();
+        _gameEvents.Clear();
+        _gameWatchdog.Stop();
         TxtDiscovery.Text = "🔍  Scanning LAN for servers…";
         _ = DiscoverLanServersAsync();
     }
