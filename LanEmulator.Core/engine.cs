@@ -90,9 +90,28 @@ public class Engine : IEngine
     }
 
     /// <summary>Auto-detect local LAN IPv4 address.</summary>
+    /// <summary>Auto-detect local LAN IPv4, skipping VPN/virtual adapters.</summary>
     public static string GetLocalIP()
     {
-        foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+        var nics = NetworkInterface.GetAllNetworkInterfaces();
+        string[] skipPatterns = { "warp", "cloudflare", "virtualbox", "hyper-v", "vethernet",
+                                   "wintun", "lanemulator", "tunnel", "pseudo" };
+
+        // Pass 1: physical adapters
+        foreach (var ni in nics)
+        {
+            if (ni.OperationalStatus != OperationalStatus.Up) continue;
+            string name = ni.Name.ToLowerInvariant();
+            if (skipPatterns.Any(p => name.Contains(p))) continue;
+            if (ni.NetworkInterfaceType == NetworkInterfaceType.Tunnel ||
+                ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
+            foreach (var ip in ni.GetIPProperties().UnicastAddresses)
+                if (ip.Address.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(ip.Address))
+                    return ip.Address.ToString();
+        }
+
+        // Pass 2: fallback to any non-loopback
+        foreach (var ni in nics)
         {
             if (ni.OperationalStatus != OperationalStatus.Up) continue;
             foreach (var ip in ni.GetIPProperties().UnicastAddresses)
@@ -138,11 +157,13 @@ public class Engine : IEngine
         else
             Log(LogLevel.Warn, "UPnP not available — manual port forwarding may be needed");
 
-        // Fetch public IP (fire-and-forget — will show on next refresh)
+        // Fetch public IP (bound to physical adapter to bypass VPNs like WARP)
+        var pubIp = localIp; // capture for lambda
         _ = Task.Run(async () =>
         {
-            var pub = await UpnpHelper.GetPublicIPAsync();
+            var pub = await UpnpHelper.GetPublicIPAsync(pubIp);
             if (pub != null) { PublicIP = pub; Log(LogLevel.Ok, $"Public IP: {pub}"); }
+            else Log(LogLevel.Warn, "Could not detect public IP");
         });
 
         return Task.CompletedTask;

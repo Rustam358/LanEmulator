@@ -71,9 +71,10 @@ public static class UpnpHelper
 
     /// <summary>
     /// Get the router's public IP address.
+    /// Binds to the physical adapter to bypass VPN tunnels (WARP, etc).
     /// Tries multiple services, returns null if all fail.
     /// </summary>
-    public static async Task<string?> GetPublicIPAsync()
+    public static async Task<string?> GetPublicIPAsync(string? bindIP = null)
     {
         string[] services = {
             "https://api.ipify.org",
@@ -81,16 +82,38 @@ public static class UpnpHelper
             "https://ifconfig.me/ip"
         };
 
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
-        foreach (var url in services)
+        HttpClient http;
+        if (!string.IsNullOrEmpty(bindIP) && System.Net.IPAddress.TryParse(bindIP, out var localAddr))
         {
-            try
+            var handler = new SocketsHttpHandler();
+            handler.ConnectCallback = async (ctx, ct) =>
             {
-                string ip = (await http.GetStringAsync(url)).Trim();
-                if (System.Net.IPAddress.TryParse(ip, out _))
-                    return ip;
+                var sock = new System.Net.Sockets.Socket(
+                    System.Net.Sockets.SocketType.Stream,
+                    System.Net.Sockets.ProtocolType.Tcp);
+                sock.Bind(new System.Net.IPEndPoint(localAddr, 0));
+                await sock.ConnectAsync(ctx.DnsEndPoint, ct);
+                return new System.Net.Sockets.NetworkStream(sock, ownsSocket: true);
+            };
+            http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(3) };
+        }
+        else
+        {
+            http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+        }
+
+        using (http)
+        {
+            foreach (var url in services)
+            {
+                try
+                {
+                    string ip = (await http.GetStringAsync(url)).Trim();
+                    if (System.Net.IPAddress.TryParse(ip, out _))
+                        return ip;
+                }
+                catch { }
             }
-            catch { }
         }
         return null;
     }
