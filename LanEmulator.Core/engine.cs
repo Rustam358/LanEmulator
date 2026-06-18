@@ -311,7 +311,7 @@ public class Engine : IEngine
         if (GamePath == null) return;
         try
         {
-            GameProcess = Process.Start(new ProcessStartInfo(GamePath) { WorkingDirectory = GameDir, UseShellExecute = false });
+            GameProcess = Process.Start(new ProcessStartInfo(GamePath) { WorkingDirectory = GameDir, UseShellExecute = true });
             Log(LogLevel.Ok, $"Game launched (PID {GameProcess?.Id})");
         }
         catch (Exception ex) { Log(LogLevel.Warn, $"Game launch failed: {ex.Message}"); }
