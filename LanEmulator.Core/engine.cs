@@ -311,18 +311,24 @@ public class Engine : IEngine
         if (GamePath == null) return;
         try
         {
+            // Launch via explorer.exe — identical to double-click, handles WOW64 correctly
             GameProcess = Process.Start(new ProcessStartInfo
-        {
-            FileName = GamePath!,
-            WorkingDirectory = GameDir,
-            UseShellExecute = true
-        });
-            Log(LogLevel.Ok, $"Game launched (PID {GameProcess?.Id})");
+            {
+                FileName = "explorer.exe",
+                Arguments = string.Concat('"', GamePath!, '"'),
+                UseShellExecute = false
+            });
+            Log(LogLevel.Ok, string.Concat("Game launched (PID ", GameProcess?.Id, ")"));
         }
-        catch (Exception ex) { Log(LogLevel.Warn, $"Game launch failed: {ex.Message}"); }
+        catch (Win32Exception ex)
+        {
+            Log(LogLevel.Warn, string.Concat("Game launch failed (Windows error): ", ex.Message));
+        }
+        catch (Exception ex)
+        {
+            Log(LogLevel.Warn, string.Concat("Game launch failed: ", ex.Message));
+        }
     }
-
-    /// <summary>Poll server for new chat messages since lastId.</summary>
     public async Task<List<ChatMessage>> PollChatAsync(int lastId)
     {
         try { return await _signaling.PollChatAsync(lastId, RoomId); }
