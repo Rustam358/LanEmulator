@@ -480,9 +480,9 @@ public partial class MainWindow : Window
             ShowLobby();
             TxtLobbyStatus.Text = "Connected";
             TxtLobbyRoom.Text = $"Room: {_engine.RoomId}";
-            TxtInviteUrl.Text = string.IsNullOrEmpty(_engine.PublicIP)
-                ? $"Invite link: {_engine.ServerUrl} (checking public IP...)"
-                : $"Invite link: {_engine.InviteUrl}";
+            TxtInviteUrl.Text = string.IsNullOrEmpty(_engine.StunLink)
+                ? $"Invite: {_engine.ServerUrl} (STUN not available — LAN only)"
+                : $"Invite: {_engine.StunLink}";
             OnStateChanged("running", _engine.MyVirtualIP);
             AddPlayerToList($"[{_engine.MyVirtualIP}] {Environment.MachineName} (you) \U0001F451", true);
         }

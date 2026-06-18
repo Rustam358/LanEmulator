@@ -23,7 +23,8 @@ public class VpnController : IVpnController
         string adapterMask,
         int prefixLength,
         int udpPort,
-        IPeerRegistry peerRegistry)
+        IPeerRegistry peerRegistry,
+        Pumps.SignalingHandler? onSignaling = null)
     {
         // UDP socket
         _udp = new UdpClient(udpPort);
@@ -81,7 +82,8 @@ public class VpnController : IVpnController
 
         _cts = new CancellationTokenSource();
 
-        _pumpNetToTun = new Thread(() => Pumps.PumpNetworkToTun(_udp, _session, _cts.Token)) { Name = "Net->Tun", IsBackground = true };
+        _pumpNetToTun = new Thread(() => Pumps.PumpNetworkToTun(_udp, _session, _cts.Token, onSignaling))
+            { Name = "Net->Tun", IsBackground = true };
         _pumpTunToNet = new Thread(() => Pumps.PumpTunToNet(_udp, _session, ipToPeer, new object(), _cts.Token)) { Name = "Tun->Net", IsBackground = true };
         _pumpNetToTun.Start(); _pumpTunToNet.Start();
 

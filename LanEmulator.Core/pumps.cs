@@ -6,7 +6,14 @@ namespace LanEmulator.Core;
 
 public static class Pumps
 {
-    public static void PumpNetworkToTun(UdpClient udp, IntPtr session, CancellationToken ct)
+    public delegate void SignalingHandler(UdpClient udp, byte[] data, int length, IPEndPoint remote);
+
+    /// <summary>
+    /// Pump UDP packets into the TUN adapter.
+    /// Signaling packets (UdpSignaling magic) are dispatched to handler instead.
+    /// </summary>
+    public static void PumpNetworkToTun(UdpClient udp, IntPtr session, CancellationToken ct,
+        SignalingHandler? onSignaling = null)
     {
         try
         {
@@ -16,6 +23,16 @@ public static class Pumps
                 task.AsTask().Wait(ct);
                 byte[] packet = task.Result.Buffer;
                 if (packet.Length == 0) continue;
+
+                // Dispatch signaling packets
+                if (packet.Length >= 4 &&
+                    packet[0] == UdpSignaling.Magic0 &&
+                    packet[1] == UdpSignaling.Magic1 &&
+                    packet[2] == UdpSignaling.Magic2)
+                {
+                    onSignaling?.Invoke(udp, packet, packet.Length, task.Result.RemoteEndPoint);
+                    continue;
+                }
 
                 IntPtr sendBuf = WintunAllocateSendPacket(session, (uint)packet.Length);
                 if (sendBuf == IntPtr.Zero)

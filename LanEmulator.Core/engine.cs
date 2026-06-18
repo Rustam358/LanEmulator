@@ -31,13 +31,17 @@ public class Engine : IEngine
     public string? GameDir { get; private set; }
     public Process? GameProcess { get; private set; }
     public string? PublicIP { get; private set; }
+    public IPEndPoint? StunEndpoint { get; private set; }
+    public string? StunLink { get; private set; }
+    private IPEndPoint? _hostStunEndpoint;
+
     public string InviteUrl => string.IsNullOrEmpty(PublicIP)
         ? ServerUrl
         : string.Concat("http://", PublicIP, ":", ServerHttpPort.ToString());
 
 
     // ── Constants ─────────────────────────────────────────
-    public const string Version = "1.3.2";
+    public const string Version = "1.4.0";
     public const string AdapterName = "LanEmulatorTun";
     public const string AdapterMask = "255.255.255.0";
     public const int PrefixLength = 24;
@@ -150,27 +154,12 @@ public class Engine : IEngine
 
         _signaling.AddFirewallRules(ServerHttpPort, UdpPort);
 
-        // UPnP port forwarding
-        int upnp = UpnpHelper.OpenPorts(localIp, ServerHttpPort, UdpPort);
-        if (upnp > 0)
-            Log(LogLevel.Ok, $"UPnP: {upnp}/2 ports opened on router");
-        else
-            Log(LogLevel.Warn, "UPnP not available — manual port forwarding may be needed");
-
-        // Fetch public IP (bound to physical adapter to bypass VPNs like WARP)
-        var pubIp = localIp; // capture for lambda
-        _ = Task.Run(async () =>
-        {
-            var pub = await UpnpHelper.GetPublicIPAsync(pubIp);
-            if (pub != null) { PublicIP = pub; Log(LogLevel.Ok, $"Public IP: {pub}"); }
-            else Log(LogLevel.Warn, "Could not detect public IP");
-        });
 
         return Task.CompletedTask;
     }
 
     /// <summary>Phase 1b: Join -- discover or enter server URL.</summary>
-    public string JoinSetup(string? cliUrl = null)
+    public string JoinSetup(string? cliUrl = null, string? hostStunLink = null)
     {
         IsHost = false;
         OnStateChanged?.Invoke("join_setup", null);
@@ -324,7 +313,7 @@ public class Engine : IEngine
     {
         OnStateChanged?.Invoke("vpn_starting", null);
 
-        await Task.Run(() => _vpn.Start(AdapterName, MyVirtualIP, AdapterMask, PrefixLength, UdpPort, _peerReg));
+        await Task.Run(() => _vpn.Start(AdapterName, MyVirtualIP, AdapterMask, PrefixLength, UdpPort, _peerReg, HandleSignaling));
         Log(LogLevel.Ok, $"UDP socket: 0.0.0.0:{UdpPort}");
         Log(LogLevel.Ok, $"Hole punch -> {_peerReg.Count} peer(s)");
         Log(LogLevel.Ok, $"Adapter '{AdapterName}': {MyVirtualIP}/{PrefixLength}");
@@ -332,6 +321,8 @@ public class Engine : IEngine
         Log(LogLevel.Ok, "Packet pumps running");
 
         _cts = new CancellationTokenSource();
+
+
         _keepaliveTask = KeepAlive.RunAsync(_http!, RoomId, UdpPort, _peerReg, _cts.Token,
             (p) => Log(LogLevel.PeerJoin, $"{p.player_id} VPN: {p.virtual_ip}"),
             (p) => Log(LogLevel.PeerLeft, $"{p.player_id} left"));
@@ -427,6 +418,47 @@ public class Engine : IEngine
         catch { return -1; }
     }
 
+    /// <summary>Handle incoming UDP signaling packets.</summary>
+    private void HandleSignaling(UdpClient udp, byte[] data, int length, IPEndPoint remote)
+    {
+        var parsed = UdpSignaling.TryParse(data, length);
+        if (parsed == null) return;
+        var (type, json) = parsed.Value;
+
+        switch (type)
+        {
+            case UdpSignaling.TypeJoinReq:
+                var req = UdpSignaling.ParseJoinRequest(json);
+                if (req == null || req.room_id != RoomId) return;
+                Log(LogLevel.PeerJoin, string.Concat("Join request from ", req.player_id, " @ ", remote));
+                // Add peer with remote's STUN endpoint
+                string vip = string.Concat("10.13.37.", (_peerReg.Count + 1).ToString());
+                var peer = new PlayerInfo(req.player_id, remote.Address.ToString(), remote.Port, vip);
+                _peerReg.AddExternalPeer(peer);
+                // Send acknowledgment
+                var ack = UdpSignaling.Build(UdpSignaling.TypeJoinAck, new UdpSignaling.JoinAck(
+                    Environment.MachineName, peer.virtual_ip, UdpPort));
+                udp.Send(ack, ack.Length, remote);
+                OnPeerJoined?.Invoke(peer);
+                break;
+
+            case UdpSignaling.TypeJoinAck:
+                var ackData = System.Text.Json.JsonSerializer.Deserialize<UdpSignaling.JoinAck>(
+                    json, UdpSignaling.JsonOpts);
+                if (ackData != null)
+                {
+                    Log(LogLevel.Ok, string.Concat("Joined! Virtual IP: ", ackData.virtual_ip));
+                    MyVirtualIP = ackData.virtual_ip;
+                }
+                break;
+
+            case UdpSignaling.TypePoll:
+            case UdpSignaling.TypePollResp:
+                // Future: UDP-based peer polling
+                break;
+        }
+    }
+
     /// <summary>Shutdown everything gracefully.</summary>
     public async Task ShutdownAsync()
     {
@@ -464,7 +496,8 @@ public class Engine : IEngine
         _signaling.RemoveFirewallRules();
         await _signaling.StopAsync();
 
-        UpnpHelper.ClosePorts();
+        StunEndpoint = null;
+        StunLink = null;
         PublicIP = null;
 
         Log(LogLevel.Ok, "Shutdown complete");

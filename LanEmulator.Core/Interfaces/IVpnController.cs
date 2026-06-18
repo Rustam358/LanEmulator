@@ -15,7 +15,8 @@ public interface IVpnController
         string adapterMask,
         int prefixLength,
         int udpPort,
-        IPeerRegistry peerRegistry);
+        IPeerRegistry peerRegistry,
+        Pumps.SignalingHandler? onSignaling = null);
 
     /// <summary>Gracefully stop pumps, close adapter, clean up routes and firewall.</summary>
     Task StopAsync(string adapterName);

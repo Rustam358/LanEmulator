@@ -23,10 +23,12 @@ public interface IEngine
     string? GamePath { get; }
     string? PublicIP { get; }
     string InviteUrl { get; }
+    IPEndPoint? StunEndpoint { get; }
+    string? StunLink { get; }
 
     // ── Lifecycle ────────────────────────────────────────────────────
     Task HostSetupAsync();
-    string JoinSetup(string? cliUrl = null);
+    string JoinSetup(string? cliUrl = null, string? hostStunLink = null);
     void Configure(int mode, string roomId, string? gamePath = null);
     Task ConnectAsync(string serverUrl);
     Task StartVpnAsync();
