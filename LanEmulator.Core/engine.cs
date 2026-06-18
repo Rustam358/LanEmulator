@@ -303,9 +303,55 @@ public class Engine : IEngine
     {
         GamePath = Path.GetFullPath(path);
         GameDir = Path.GetDirectoryName(GamePath);
+        ValidateGameDirectory();
     }
 
-    /// <summary>Launch the game executable (Steam mode only).</summary>
+
+    /// <summary>Scan game directory for common compatibility issues.</summary>
+    public void ValidateGameDirectory()
+    {
+        if (string.IsNullOrEmpty(GameDir) || !Directory.Exists(GameDir)) return;
+        try
+        {
+            foreach (var file in Directory.GetFiles(GameDir, "*.dll"))
+            {
+                try
+                {
+                    var bytes = File.ReadAllBytes(file);
+                    if (bytes.Length < 0x40) continue;
+                    // MZ signature
+                    if (bytes[0] != 'M' || bytes[1] != 'Z')
+                    {
+                        var name = Path.GetFileName(file);
+                        Log(LogLevel.Warn, string.Concat("Game dir: '", name, "' is not a valid DLL - may cause launch errors"));
+                        continue;
+                    }
+                    int peOff = BitConverter.ToInt32(bytes, 0x3C);
+                    if (peOff < 64 || peOff + 6 > bytes.Length) continue;
+                    // PE signature
+                    if (bytes[peOff] != 'P' || bytes[peOff+1] != 'E') continue;
+                    ushort machine = BitConverter.ToUInt16(bytes, peOff + 4);
+                    if (machine == 0x8664) // AMD64
+                    {
+                        var name = Path.GetFileName(file);
+                        Log(LogLevel.Warn, string.Concat("64-bit DLL in game folder: '", name,
+                            "' - may crash 32-bit games (0xc000007b). Remove or use Pure LAN mode."));
+                    }
+                }
+                catch { /* skip */ }
+            }
+            // Goldberg leftovers
+            bool gDll = File.Exists(Path.Combine(GameDir, "steam_api64.dll"));
+            bool gBak = File.Exists(Path.Combine(GameDir, "steam_api64.dll.bak"));
+            bool gIni = File.Exists(Path.Combine(GameDir, "GoldbergSteamEmu.ini"));
+            bool gDir = Directory.Exists(Path.Combine(GameDir, "steam_settings"));
+            if (gDll || gBak || gIni || gDir)
+                Log(LogLevel.Warn, "Goldberg emulator leftovers in game folder. For Pure LAN, remove these files.");
+        }
+        catch (Exception ex) { Log(LogLevel.Warn, string.Concat("Game scan: ", ex.Message)); }
+    }
+
+        /// <summary>Launch the game executable (Steam mode only).</summary>
     public void LaunchGame()
     {
         if (GamePath == null) return;
