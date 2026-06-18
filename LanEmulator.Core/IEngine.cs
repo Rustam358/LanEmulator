@@ -21,6 +21,8 @@ public interface IEngine
     int PeerCount { get; }
     bool IsRunning { get; }
     string? GamePath { get; }
+    string? PublicIP { get; }
+    string InviteUrl { get; }
 
     // ── Lifecycle ────────────────────────────────────────────────────
     Task HostSetupAsync();

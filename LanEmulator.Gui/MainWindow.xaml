@@ -163,6 +163,12 @@
                             <TextBox x:Name="TxtLobbyIp" IsReadOnly="True" IsReadOnlyCaretVisible="True" BorderThickness="0" Background="Transparent" Text="10.13.37.1"
                                        Foreground="#A6E3A1" FontFamily="Consolas" FontSize="12"
                                        VerticalAlignment="Center"/>
+                            <TextBlock Text=" ┊ " Foreground="#45475A" VerticalAlignment="Center"/>
+                            <TextBox x:Name="TxtInviteUrl" IsReadOnly="True" IsReadOnlyCaretVisible="True"
+                                     BorderThickness="0" Background="Transparent" Text=""
+                                     Foreground="#F9E2AF" FontFamily="Consolas" FontSize="11"
+                                     VerticalAlignment="Center" MinWidth="200"
+                                     ToolTip="Copy this link and send to other players"/>
                         </StackPanel>
                         <Button Content="&#x2715; Leave" Style="{StaticResource LinkButton}"
                                 Foreground="#F38BA8" HorizontalAlignment="Right"

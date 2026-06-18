@@ -30,6 +30,11 @@ public class Engine : IEngine
     public string? GamePath { get; private set; }
     public string? GameDir { get; private set; }
     public Process? GameProcess { get; private set; }
+    public string? PublicIP { get; private set; }
+    public string InviteUrl => string.IsNullOrEmpty(PublicIP)
+        ? ServerUrl
+        : string.Concat("http://", PublicIP, ":", ServerHttpPort.ToString());
+
 
     // ── Constants ─────────────────────────────────────────
     public const string Version = "1.3.2";
@@ -125,6 +130,21 @@ public class Engine : IEngine
         Log(LogLevel.Ok, $"Server at {ServerUrl}");
 
         _signaling.AddFirewallRules(ServerHttpPort, UdpPort);
+
+        // UPnP port forwarding
+        int upnp = UpnpHelper.OpenPorts(localIp, ServerHttpPort, UdpPort);
+        if (upnp > 0)
+            Log(LogLevel.Ok, $"UPnP: {upnp}/2 ports opened on router");
+        else
+            Log(LogLevel.Warn, "UPnP not available — manual port forwarding may be needed");
+
+        // Fetch public IP (fire-and-forget — will show on next refresh)
+        _ = Task.Run(async () =>
+        {
+            var pub = await UpnpHelper.GetPublicIPAsync();
+            if (pub != null) { PublicIP = pub; Log(LogLevel.Ok, $"Public IP: {pub}"); }
+        });
+
         return Task.CompletedTask;
     }
 
@@ -422,6 +442,9 @@ public class Engine : IEngine
 
         _signaling.RemoveFirewallRules();
         await _signaling.StopAsync();
+
+        UpnpHelper.ClosePorts();
+        PublicIP = null;
 
         Log(LogLevel.Ok, "Shutdown complete");
     }
