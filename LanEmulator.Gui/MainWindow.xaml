@@ -103,7 +103,7 @@
                          Margin="24,0,24,0"/>
 
                 <!-- Bottom bar -->
-                <Border Grid.Row="1" Background="#181825" Padding="12,8"
+                <Border Grid.Row="2" Background="#181825" Padding="12,8"
                         CornerRadius="0,0,10,10">
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
                         <TextBlock Text="&#x1F50D;  Scanning LAN for servers…" FontSize="11"
@@ -205,7 +205,7 @@
                                             Click="BtnLaunch_Click"
                                             Style="{StaticResource SmallButton}"
                                             Background="#A6E3A1" Foreground="#1E1E2E"
-                                            />
+                                            IsEnabled="False"/>
                                 </StackPanel>
                             </Grid>
                         </Border>
@@ -239,7 +239,7 @@
                                          Background="#1E1E2E" BorderBrush="#45475A"
                                          Foreground="#CDD6F4" CaretBrush="#CDD6F4"
                                          Padding="10,8" FontSize="13"
-                                         />
+                                         ToolTip="Type a message and press Enter"/>
                                 <Button Content="Send" Grid.Column="1"
                                         Width="60" Margin="8,0,0,0"
                                         Click="BtnSendChat_Click"
