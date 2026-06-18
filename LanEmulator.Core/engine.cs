@@ -308,7 +308,7 @@ public class Engine : IEngine
     /// <summary>Launch the game executable (Steam mode only).</summary>
     public void LaunchGame()
     {
-        if (Mode != 1 || GamePath == null) return;
+        if (GamePath == null) return;
         try
         {
             GameProcess = Process.Start(new ProcessStartInfo(GamePath) { WorkingDirectory = GameDir, UseShellExecute = false });
