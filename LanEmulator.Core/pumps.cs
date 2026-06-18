@@ -1,5 +1,7 @@
 using static LanEmulator.Core.WintunInterop;
 
+using System.Diagnostics;
+
 namespace LanEmulator.Core;
 
 public static class Pumps
@@ -28,7 +30,7 @@ public static class Pumps
             }
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { Debug.WriteLine($"PumpNetToTun error: {ex.Message}"); }
+        catch (Exception ex) { Trace.WriteLine($"PumpNetToTun error: {ex.Message}"); }
     }
 
     public static void PumpTunToNet(UdpClient udp, IntPtr session,

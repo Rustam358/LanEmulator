@@ -58,7 +58,7 @@ public static class Goldberg
         try
         {
             using var h = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
-            h.DefaultRequestHeaders.Add("User-Agent", "LanEmulator/1.1");
+            h.DefaultRequestHeaders.Add("User-Agent", "LanEmulator/1.2.0");
             var r = await h.GetStringAsync(
                 $"https://steamcommunity.com/actions/SearchApps/{Uri.EscapeDataString(gameName)}");
             using var j = System.Text.Json.JsonDocument.Parse(r);

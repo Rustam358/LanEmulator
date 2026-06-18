@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace LanEmulator.Core;
 
 public static class Helpers
@@ -108,6 +110,6 @@ public static class Helpers
             }
             return false; // driver not loaded, may need reboot
         }
-        catch (Exception ex) { Debug.WriteLine($"AutoInstallDriverAsync failed: {ex.Message}"); return false; }
+        catch (Exception ex) { Trace.WriteLine($"AutoInstallDriverAsync failed: {ex.Message}"); return false; }
     }
 }

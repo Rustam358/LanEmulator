@@ -27,6 +27,8 @@ public class VpnController : IVpnController
     {
         // UDP socket
         _udp = new UdpClient(udpPort);
+        try
+        {
         _udp.Client.ReceiveBufferSize = 4 * 1024 * 1024;
         _udp.Client.SendBufferSize = 4 * 1024 * 1024;
 
@@ -84,6 +86,13 @@ public class VpnController : IVpnController
         _pumpNetToTun.Start(); _pumpTunToNet.Start();
 
         IsRunning = true;
+        }
+        catch
+        {
+            _udp?.Dispose();
+            _udp = null;
+            throw;
+        }
     }
 
     public async Task StopAsync(string adapterName)

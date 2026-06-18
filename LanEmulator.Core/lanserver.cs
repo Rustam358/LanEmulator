@@ -5,6 +5,8 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
+using System.Diagnostics;
+
 namespace LanEmulator.Core;
 
 /// <summary>
@@ -87,6 +89,8 @@ public sealed class LanServer : IDisposable
 
             if (method == "POST" && path == "/register")
                 await HandleRegister(req, resp);
+            else if (method == "POST" && path == "/leave")
+                await HandleLeave(req, resp);
             else if (method == "GET" && path == "/poll")
                 HandlePoll(req, resp);
             else if (method == "POST" && path == "/chat")
@@ -96,7 +100,7 @@ public sealed class LanServer : IDisposable
             else
                 WriteJson(resp, new { server = "LanEmulator", version = Engine.Version });
         }
-        catch (Exception ex) { Debug.WriteLine($"HandleRequest error: {ex.Message}"); }
+        catch (Exception ex) { Trace.WriteLine($"HandleRequest error: {ex.Message}"); }
     }
 
     private async Task HandleRegister(HttpListenerRequest req, HttpListenerResponse resp)
@@ -128,6 +132,16 @@ public sealed class LanServer : IDisposable
         var player = room.players[body.player_id];
         player.last_seen = DateTime.UtcNow;
         WriteJson(resp, new { status = "ok", virtual_ip = player.virtual_ip });
+    }
+
+    private async Task HandleLeave(HttpListenerRequest req, HttpListenerResponse resp)
+    {
+        string? roomId = req.QueryString["room_id"];
+        string? playerId = req.QueryString["player_id"];
+        if (string.IsNullOrEmpty(roomId) || string.IsNullOrEmpty(playerId) || !_rooms.TryGetValue(roomId, out var room))
+        { WriteJson(resp, new { status = "ok" }); return; }
+        room.players.TryRemove(playerId, out _);
+        WriteJson(resp, new { status = "ok" });
     }
 
     private void HandlePoll(HttpListenerRequest req, HttpListenerResponse resp)

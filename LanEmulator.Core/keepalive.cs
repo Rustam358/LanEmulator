@@ -50,7 +50,7 @@ public static class KeepAlive
                 knownIds = currentIds;
             }
             catch (OperationCanceledException) { break; }
-            catch (Exception ex) { Debug.WriteLine($"KeepAlive error: {ex.Message}"); }
+            catch (Exception ex) { Trace.WriteLine($"KeepAlive error: {ex.Message}"); }
         }
     }
 }
