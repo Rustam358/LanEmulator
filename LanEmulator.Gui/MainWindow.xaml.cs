@@ -168,15 +168,8 @@ public partial class MainWindow : Window
         else
             DiagGamePath.Text = "No game selected";
 
-        DiagWarnings.Items.Clear();
-        foreach (var w in _diagWarnings)
-            DiagWarnings.Items.Add(new TextBlock
-            {
-                Text = w,
-                Foreground = new SolidColorBrush(Color.FromRgb(0xF9, 0xE2, 0xAF)),
-                FontFamily = new FontFamily("Consolas"),
-                FontSize = 11
-            });
+        DiagWarnings.Text = _diagWarnings.Count == 0
+            ? "" : string.Join(Environment.NewLine, _diagWarnings);
 
         // Network info
         try
@@ -467,7 +460,8 @@ public partial class MainWindow : Window
         ResetWelcomeButtons();
         LstPlayers.Items.Clear();
         LstChat.Text = "";
-        LstLog.Text = "";
+        LstLog.Document.Blocks.Clear();
+        LstWelcomeLog.Document.Blocks.Clear();
         TxtDiscovery.Text = "🔍  Scanning LAN for servers…";
         _ = DiscoverLanServersAsync();
     }
@@ -496,11 +490,17 @@ public partial class MainWindow : Window
             _diagWarnings.Add(e.Message);
             if (_diagWarnings.Count > 100) _diagWarnings.RemoveAt(0);
         }
-        LstLog.AppendText(string.Concat(e.Time.ToString("HH:mm:ss"), "  ", e.Message, Environment.NewLine));
-        if (LstLog.LineCount > 1000)
-            LstLog.Text = string.Join(Environment.NewLine,
-                LstLog.Text.Split(Environment.NewLine).Skip(LstLog.LineCount - 1000));
-        LstLog.ScrollToEnd();
+        var color = e.Level switch
+        {
+            LogLevel.Error => Color.FromRgb(0xF3, 0x8B, 0xA8),
+            LogLevel.Warn  => Color.FromRgb(0xF9, 0xE2, 0xAF),
+            LogLevel.Ok    => Color.FromRgb(0xA6, 0xE3, 0xA1),
+            LogLevel.Info  => Color.FromRgb(0x89, 0xB4, 0xFA),
+            LogLevel.PeerJoin => Color.FromRgb(0xA6, 0xE3, 0xA1),
+            LogLevel.PeerLeft => Color.FromRgb(0xF3, 0x8B, 0xA8),
+            _ => Color.FromRgb(0xCD, 0xD6, 0xF4)
+        };
+        AppendColoredLine(LstLog, string.Concat(e.Time.ToString("HH:mm:ss"), "  ", e.Message), color);
     });
 
     private void OnStateChanged(string state, string? detail)
@@ -582,12 +582,36 @@ public partial class MainWindow : Window
         }
     }
 
+    // RichTextBox helper: append colored line, trim to maxLines, scroll to end
+    private void AppendColoredLine(System.Windows.Controls.RichTextBox rtb, string text, Color color)
+    {
+        try
+        {
+            var doc = rtb.Document;
+            var run = new System.Windows.Documents.Run(text + Environment.NewLine);
+            run.Foreground = new SolidColorBrush(color);
+            var p = new System.Windows.Documents.Paragraph(run) { Margin = new Thickness(0), LineHeight = 14 };
+            doc.Blocks.Add(p);
+            while (doc.Blocks.Count > 1000) doc.Blocks.Remove(doc.Blocks.FirstBlock);
+            rtb.ScrollToEnd();
+        }
+        catch { }
+    }
+
     /// <summary>Log a message before engine starts (visible on welcome page).</summary>
     private void LogStatic(LogLevel level, string msg) => Dispatcher.Invoke(() =>
     {
-        string line = string.Concat(DateTime.Now.ToString("HH:mm:ss"), "  ", msg, Environment.NewLine);
-        try { LstWelcomeLog.AppendText(line); if (LstWelcomeLog.LineCount > 1000) LstWelcomeLog.Text = string.Join(Environment.NewLine, LstWelcomeLog.Text.Split(Environment.NewLine).Skip(LstWelcomeLog.LineCount - 1000)); LstWelcomeLog.ScrollToEnd(); } catch { }
-        try { LstLog.AppendText(line); if (LstLog.LineCount > 1000) LstLog.Text = string.Join(Environment.NewLine, LstLog.Text.Split(Environment.NewLine).Skip(LstLog.LineCount - 1000)); LstLog.ScrollToEnd(); } catch { }
+        var color = level switch
+        {
+            LogLevel.Error => Color.FromRgb(0xF3, 0x8B, 0xA8),
+            LogLevel.Warn  => Color.FromRgb(0xF9, 0xE2, 0xAF),
+            LogLevel.Ok    => Color.FromRgb(0xA6, 0xE3, 0xA1),
+            LogLevel.Info  => Color.FromRgb(0x89, 0xB4, 0xFA),
+            _ => Color.FromRgb(0xCD, 0xD6, 0xF4)
+        };
+        string line = string.Concat(DateTime.Now.ToString("HH:mm:ss"), "  ", msg);
+        try { AppendColoredLine(LstWelcomeLog, line, color); } catch { }
+        try { AppendColoredLine(LstLog, line, color); } catch { }
     });
 }
 

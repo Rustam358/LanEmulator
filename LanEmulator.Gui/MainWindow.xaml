@@ -114,12 +114,14 @@
                 </StackPanel>
 
                 <!-- Welcome page log (errors visible before entering lobby) -->
-                <TextBox x:Name="LstWelcomeLog" Grid.Row="1"
+                <RichTextBox x:Name="LstWelcomeLog" Grid.Row="1"
                          IsReadOnly="True" IsReadOnlyCaretVisible="True"
                          Background="#181825" BorderThickness="0"
-                         Foreground="#CDD6F4" FontFamily="Consolas" FontSize="11"
+                         FontFamily="Consolas" FontSize="11"
                          VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
-                         TextWrapping="NoWrap" Margin="24,0,24,0"/>
+                         Margin="24,0,24,0">
+                    <FlowDocument PageWidth="10000"/>
+                </RichTextBox>
 
                 <!-- Bottom bar -->
                 <Border Grid.Row="2" Background="#181825" Padding="12,8"
@@ -281,12 +283,13 @@
                         </Grid.RowDefinitions>
                         <TextBlock Text="LOG" Foreground="#6C7086" FontSize="10"
                                    FontWeight="Bold" Margin="0,0,0,4"/>
-                        <TextBox x:Name="LstLog" Grid.Row="1"
+                        <RichTextBox x:Name="LstLog" Grid.Row="1"
                                  IsReadOnly="True" IsReadOnlyCaretVisible="True"
                                  Background="Transparent" BorderThickness="0"
-                                 Foreground="#CDD6F4" FontFamily="Consolas" FontSize="11"
-                                 VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
-                                 TextWrapping="NoWrap"/>
+                                 FontFamily="Consolas" FontSize="11"
+                                 VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
+                            <FlowDocument PageWidth="10000"/>
+                        </RichTextBox>
                     </Grid>
                 </Border>
             </Grid>
@@ -323,16 +326,17 @@
                                 <TextBlock Text="&#x1F3AE; GAME" Foreground="#6C7086"
                                            FontSize="11" FontWeight="Bold"
                                            Margin="0,0,0,8"/>
-                                <TextBlock x:Name="DiagGamePath"
+                                <TextBox x:Name="DiagGamePath" IsReadOnly="True" IsReadOnlyCaretVisible="True" BorderThickness="0" Background="Transparent"
                                            Text="No game selected"
                                            Foreground="#585B70" FontSize="12"
                                            FontFamily="Consolas" Margin="0,0,0,4"/>
-                                <ListBox x:Name="DiagWarnings"
-                                         Background="Transparent"
-                                         BorderThickness="0"
+                                <TextBox x:Name="DiagWarnings"
+                                         IsReadOnly="True" IsReadOnlyCaretVisible="True"
+                                         Background="Transparent" BorderThickness="0"
                                          Foreground="#F9E2AF"
-                                         FontFamily="Consolas"
-                                         FontSize="11" MaxHeight="140"/>
+                                         FontFamily="Consolas" FontSize="11"
+                                         TextWrapping="NoWrap" MaxHeight="140"
+                                         VerticalScrollBarVisibility="Auto"/>
                             </StackPanel>
                         </Border>
 
@@ -343,19 +347,19 @@
                                 <TextBlock Text="&#x1F310; NETWORK"
                                            Foreground="#6C7086" FontSize="11"
                                            FontWeight="Bold" Margin="0,0,0,8"/>
-                                <TextBlock x:Name="DiagAdapter"
+                                <TextBox x:Name="DiagAdapter" IsReadOnly="True" IsReadOnlyCaretVisible="True" BorderThickness="0" Background="Transparent"
                                            Text="Adapter: checking..."
                                            Foreground="#CDD6F4" FontSize="12"
                                            FontFamily="Consolas" Margin="0,0,0,2"/>
-                                <TextBlock x:Name="DiagIp"
+                                <TextBox x:Name="DiagIp" IsReadOnly="True" IsReadOnlyCaretVisible="True" BorderThickness="0" Background="Transparent"
                                            Text="IP: --"
                                            Foreground="#A6E3A1" FontSize="12"
                                            FontFamily="Consolas" Margin="0,0,0,2"/>
-                                <TextBlock x:Name="DiagRoutes"
+                                <TextBox x:Name="DiagRoutes" IsReadOnly="True" IsReadOnlyCaretVisible="True" BorderThickness="0" Background="Transparent"
                                            Text="Routes: checking..."
                                            Foreground="#89B4FA" FontSize="12"
                                            FontFamily="Consolas"/>
-                                <TextBlock x:Name="DiagDrvVer"
+                                <TextBox x:Name="DiagDrvVer" IsReadOnly="True" IsReadOnlyCaretVisible="True" BorderThickness="0" Background="Transparent"
                                            Text="Wintun driver: --"
                                            Foreground="#585B70" FontSize="12"
                                            FontFamily="Consolas" Margin="0,4,0,0"/>
@@ -369,15 +373,15 @@
                                 <TextBlock Text="&#x1F3E0; ROOM"
                                            Foreground="#6C7086" FontSize="11"
                                            FontWeight="Bold" Margin="0,0,0,8"/>
-                                <TextBlock x:Name="DiagRoomId"
+                                <TextBox x:Name="DiagRoomId" IsReadOnly="True" IsReadOnlyCaretVisible="True" BorderThickness="0" Background="Transparent"
                                            Text="Room: not connected"
                                            Foreground="#CDD6F4" FontSize="12"
                                            FontFamily="Consolas" Margin="0,0,0,2"/>
-                                <TextBlock x:Name="DiagPeers"
+                                <TextBox x:Name="DiagPeers" IsReadOnly="True" IsReadOnlyCaretVisible="True" BorderThickness="0" Background="Transparent"
                                            Text="Peers: --"
                                            Foreground="#A6E3A1" FontSize="12"
                                            FontFamily="Consolas" Margin="0,0,0,2"/>
-                                <TextBlock x:Name="DiagPort"
+                                <TextBox x:Name="DiagPort" IsReadOnly="True" IsReadOnlyCaretVisible="True" BorderThickness="0" Background="Transparent"
                                            Text="UDP port: 51820"
                                            Foreground="#585B70" FontSize="12"
                                            FontFamily="Consolas"/>
