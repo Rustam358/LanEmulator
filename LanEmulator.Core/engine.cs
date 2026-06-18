@@ -32,7 +32,7 @@ public class Engine : IEngine
     public Process? GameProcess { get; private set; }
 
     // ── Constants ─────────────────────────────────────────
-    public const string Version = "1.3.0";
+    public const string Version = "1.3.1";
     public const string AdapterName = "LanEmulatorTun";
     public const string AdapterMask = "255.255.255.0";
     public const int PrefixLength = 24;
