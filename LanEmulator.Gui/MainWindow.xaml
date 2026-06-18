@@ -74,7 +74,7 @@
                                            Margin="0,8,0,0"/>
                                 <TextBlock Text="Create a virtual LAN room" FontSize="11"
                                            Foreground="#6C7086" HorizontalAlignment="Center"
-                                           Margin="0,4,0,0"/>
+                                           TextWrapping="Wrap" Margin="0,4,0,0"/>
                             </StackPanel>
                         </Button>
 
