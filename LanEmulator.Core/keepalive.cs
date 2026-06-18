@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace LanEmulator.Core;
 
 public delegate void PeerEvent(PlayerInfo peer);
@@ -48,7 +50,7 @@ public static class KeepAlive
                 knownIds = currentIds;
             }
             catch (OperationCanceledException) { break; }
-            catch { }
+            catch (Exception ex) { Debug.WriteLine($"KeepAlive error: {ex.Message}"); }
         }
     }
 }

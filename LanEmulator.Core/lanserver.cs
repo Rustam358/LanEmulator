@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Threading;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -30,6 +31,7 @@ public sealed class LanServer : IDisposable
     private sealed class Room
     {
         public readonly ConcurrentDictionary<string, Player> players = new();
+        public int _ipSeq;
     }
 
     private readonly ConcurrentDictionary<string, Room> _rooms = new();
@@ -197,8 +199,8 @@ public sealed class LanServer : IDisposable
     // Helpers
     private string AssignIpForRoom(Room room)
     {
-        int used = room.players.Count;
-        return $"10.13.37.{Math.Min(used + 1, 254)}";
+        int seq = Interlocked.Increment(ref room._ipSeq);
+        return $"10.13.37.{Math.Min(seq, 254)}";
     }
 
     private static readonly JsonSerializerOptions _jsonOpts = new(JsonSerializerDefaults.Web)

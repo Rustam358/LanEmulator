@@ -23,7 +23,7 @@ public static class Helpers
         try
         {
             using var p = Process.Start(new ProcessStartInfo("route", args)
-            { UseShellExecute = false, RedirectStandardOutput = true, CreateNoWindow = true });
+            { UseShellExecute = false, CreateNoWindow = true });
             p?.WaitForExit(5000);
         }
         catch { }
